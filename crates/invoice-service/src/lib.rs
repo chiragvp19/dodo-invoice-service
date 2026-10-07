@@ -1,8 +1,12 @@
 pub mod auth;
 pub mod config;
 pub mod error;
+pub mod invoices;
+pub mod outbox;
+pub mod pagination;
 mod routes;
 pub mod seed;
+pub mod state_machine;
 pub mod telemetry;
 
 use std::{net::SocketAddr, sync::Arc};
