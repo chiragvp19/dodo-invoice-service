@@ -10,6 +10,7 @@ mod routes;
 pub mod seed;
 pub mod state_machine;
 pub mod telemetry;
+pub mod webhooks;
 pub mod workers;
 
 use std::{net::SocketAddr, sync::Arc};
@@ -83,6 +84,7 @@ pub async fn start(config: Config) -> anyhow::Result<(SocketAddr, JoinHandle<any
     let psp = PspClient::new(&config.psp_url, config.psp_timeout);
     let state = AppState { db, config: Arc::new(config), psp };
     tokio::spawn(workers::reconciler::run(state.clone()));
+    tokio::spawn(workers::webhooks::run(state.clone()));
     let listener = TcpListener::bind(&state.config.bind_addr)
         .await
         .with_context(|| format!("binding {}", state.config.bind_addr))?;

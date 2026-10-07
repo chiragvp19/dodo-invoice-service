@@ -2,6 +2,7 @@ mod api_keys;
 mod businesses;
 mod customers;
 mod invoices;
+mod webhooks;
 
 use axum::{
     routing::{delete, get, post},
@@ -24,4 +25,6 @@ pub fn v1() -> Router<AppState> {
         .route("/invoices/{id}/mark_uncollectible", post(invoices::mark_uncollectible))
         .route("/invoices/{id}/pay", post(crate::payments::pay))
         .route("/invoices/{id}/payment_attempts", get(invoices::payment_attempts))
+        .route("/webhook_endpoints", post(webhooks::create).get(webhooks::list))
+        .route("/events", get(webhooks::events))
 }
