@@ -11,7 +11,10 @@ use crate::{
 
 /// Creates an additional key for the calling business (rotation: create new,
 /// deploy it, then revoke the old one).
-pub async fn create(auth: Auth, State(state): State<AppState>) -> ApiResult<(StatusCode, Json<Value>)> {
+pub async fn create(
+    auth: Auth,
+    State(state): State<AppState>,
+) -> ApiResult<(StatusCode, Json<Value>)> {
     let key = auth::generate_key();
     auth::store_key(&state.db, auth.business_id, &key).await?;
     tracing::info!(business_id = %auth.business_id, key_prefix = %key.prefix, "api key created");
@@ -39,5 +42,7 @@ pub async fn revoke(
     .await?;
     let (prefix, revoked_at) = row.ok_or(ApiError::NotFound("API key"))?;
     tracing::info!(business_id = %auth.business_id, key_prefix = %prefix, "api key revoked");
-    Ok(Json(json!({ "id": id, "prefix": prefix, "revoked_at": revoked_at })))
+    Ok(Json(
+        json!({ "id": id, "prefix": prefix, "revoked_at": revoked_at }),
+    ))
 }

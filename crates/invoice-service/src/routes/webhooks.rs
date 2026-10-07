@@ -32,7 +32,8 @@ pub async fn create(
     State(state): State<AppState>,
     ApiJson(req): ApiJson<CreateEndpoint>,
 ) -> ApiResult<(StatusCode, Json<Value>)> {
-    let url = reqwest::Url::parse(req.url.trim()).map_err(|_| ApiError::validation("url must be an absolute URL"))?;
+    let url = reqwest::Url::parse(req.url.trim())
+        .map_err(|_| ApiError::validation("url must be an absolute URL"))?;
     if !matches!(url.scheme(), "http" | "https") || url.host().is_none() {
         return Err(ApiError::validation("url must be http(s) with a host"));
     }
@@ -64,7 +65,10 @@ pub async fn list(auth: Auth, State(state): State<AppState>) -> ApiResult<Json<L
     .bind(auth.business_id)
     .fetch_all(&state.db)
     .await?;
-    Ok(Json(List { data, has_more: false }))
+    Ok(Json(List {
+        data,
+        has_more: false,
+    }))
 }
 
 #[derive(Serialize, FromRow)]

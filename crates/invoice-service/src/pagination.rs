@@ -18,7 +18,9 @@ impl Page {
         match self.limit {
             None => Ok(DEFAULT_LIMIT),
             Some(l) if (1..=MAX_LIMIT).contains(&l) => Ok(l),
-            Some(_) => Err(ApiError::validation(format!("limit must be between 1 and {MAX_LIMIT}"))),
+            Some(_) => Err(ApiError::validation(format!(
+                "limit must be between 1 and {MAX_LIMIT}"
+            ))),
         }
     }
 }
@@ -34,6 +36,9 @@ impl<T> List<T> {
     pub fn from_rows(mut rows: Vec<T>, limit: i64) -> Self {
         let has_more = rows.len() as i64 > limit;
         rows.truncate(limit as usize);
-        List { data: rows, has_more }
+        List {
+            data: rows,
+            has_more,
+        }
     }
 }

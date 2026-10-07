@@ -62,25 +62,45 @@ fn verify(secret: &str, header: &str, body: &[u8], now: i64) -> Result<(), &'sta
     }
 }
 
-async fn webhook(State(rx): State<AppState>, headers: HeaderMap, body: Bytes) -> (StatusCode, Json<Value>) {
+async fn webhook(
+    State(rx): State<AppState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> (StatusCode, Json<Value>) {
     let n = rx.requests.fetch_add(1, Ordering::SeqCst) + 1;
     if n <= rx.fail_first_n {
-        tracing::warn!(request = n, "✘ simulating failure (FAIL_FIRST_N={})", rx.fail_first_n);
-        return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": "simulated failure" })));
+        tracing::warn!(
+            request = n,
+            "✘ simulating failure (FAIL_FIRST_N={})",
+            rx.fail_first_n
+        );
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": "simulated failure" })),
+        );
     }
 
     let Some(sig) = headers.get("dodo-signature").and_then(|v| v.to_str().ok()) else {
         tracing::warn!("✘ rejected: missing Dodo-Signature");
-        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "missing signature" })));
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "missing signature" })),
+        );
     };
-    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64;
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
     if let Err(reason) = verify(&rx.secret, sig, &body, now) {
         tracing::warn!(reason, "✘ rejected: bad signature");
         return (StatusCode::BAD_REQUEST, Json(json!({ "error": reason })));
     }
 
     let Ok(event) = serde_json::from_slice::<Value>(&body) else {
-        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "invalid json" })));
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "invalid json" })),
+        );
     };
     let id = event["id"].as_str().unwrap_or_default().to_owned();
     let kind = event["type"].as_str().unwrap_or_default().to_owned();
@@ -111,7 +131,10 @@ async fn main() {
     let port = std::env::var("PORT").unwrap_or_else(|_| "9000".into());
     let state = Arc::new(Receiver {
         secret: std::env::var("WEBHOOK_SECRET").expect("WEBHOOK_SECRET must be set"),
-        fail_first_n: std::env::var("FAIL_FIRST_N").ok().and_then(|v| v.parse().ok()).unwrap_or(0),
+        fail_first_n: std::env::var("FAIL_FIRST_N")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0),
         requests: AtomicU64::new(0),
         seen: Mutex::new(HashSet::new()),
         received: Mutex::new(Vec::new()),
@@ -121,7 +144,9 @@ async fn main() {
         .route("/webhooks", post(webhook))
         .route("/received", get(received))
         .with_state(state);
-    let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{port}")).await.unwrap();
+    let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{port}"))
+        .await
+        .unwrap();
     tracing::info!(%port, "webhook-receiver listening");
     axum::serve(listener, app).await.unwrap();
 }
@@ -141,8 +166,17 @@ mod tests {
     fn verifies_and_rejects() {
         let body = br#"{"id":"evt"}"#;
         assert!(verify("s", &sign("s", 1000, body), body, 1000).is_ok());
-        assert_eq!(verify("s", &sign("other", 1000, body), body, 1000), Err("signature mismatch"));
-        assert_eq!(verify("s", &sign("s", 1000, body), b"{}", 1000), Err("signature mismatch"));
-        assert_eq!(verify("s", &sign("s", 1000, body), body, 1000 + 301), Err("timestamp outside tolerance"));
+        assert_eq!(
+            verify("s", &sign("other", 1000, body), body, 1000),
+            Err("signature mismatch")
+        );
+        assert_eq!(
+            verify("s", &sign("s", 1000, body), b"{}", 1000),
+            Err("signature mismatch")
+        );
+        assert_eq!(
+            verify("s", &sign("s", 1000, body), body, 1000 + 301),
+            Err("timestamp outside tolerance")
+        );
     }
 }

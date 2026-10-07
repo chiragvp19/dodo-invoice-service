@@ -108,7 +108,12 @@ pub fn transition(from: InvoiceStatus, action: Action) -> Result<InvoiceStatus, 
         (Open, Action::MarkUncollectible) => Uncollectible,
         (Open | Uncollectible, Action::Pay) => Processing,
         (Processing, Action::PaymentSucceeded) => Paid,
-        (Processing, Action::PaymentFailed { previous: previous @ (Open | Uncollectible) }) => previous,
+        (
+            Processing,
+            Action::PaymentFailed {
+                previous: previous @ (Open | Uncollectible),
+            },
+        ) => previous,
         _ => return Err(InvalidTransition { from, action }),
     };
     Ok(to)
@@ -137,7 +142,9 @@ mod tests {
             A::Pay,
             A::PaymentSucceeded,
             A::PaymentFailed { previous: S::Open },
-            A::PaymentFailed { previous: S::Uncollectible },
+            A::PaymentFailed {
+                previous: S::Uncollectible,
+            },
         ];
         let expected: &[(S, A, S)] = &[
             (S::Draft, A::Finalize, S::Open),
@@ -147,8 +154,18 @@ mod tests {
             (S::Open, A::Pay, S::Processing),
             (S::Uncollectible, A::Pay, S::Processing),
             (S::Processing, A::PaymentSucceeded, S::Paid),
-            (S::Processing, A::PaymentFailed { previous: S::Open }, S::Open),
-            (S::Processing, A::PaymentFailed { previous: S::Uncollectible }, S::Uncollectible),
+            (
+                S::Processing,
+                A::PaymentFailed { previous: S::Open },
+                S::Open,
+            ),
+            (
+                S::Processing,
+                A::PaymentFailed {
+                    previous: S::Uncollectible,
+                },
+                S::Uncollectible,
+            ),
         ];
         // Every (status, action) pair is either in `expected` or rejected.
         for from in ALL_STATUSES {
@@ -157,7 +174,12 @@ mod tests {
                     .iter()
                     .find(|(f, a, _)| *f == from && *a == action)
                     .map(|(_, _, to)| *to);
-                assert_eq!(transition(from, action).ok(), want, "{from} --{}-->", action.name());
+                assert_eq!(
+                    transition(from, action).ok(),
+                    want,
+                    "{from} --{}-->",
+                    action.name()
+                );
             }
         }
     }
@@ -166,7 +188,13 @@ mod tests {
     fn terminal_states_have_no_exits() {
         for from in [S::Paid, S::Void] {
             assert!(from.is_terminal());
-            for action in [A::Finalize, A::Void, A::MarkUncollectible, A::Pay, A::PaymentSucceeded] {
+            for action in [
+                A::Finalize,
+                A::Void,
+                A::MarkUncollectible,
+                A::Pay,
+                A::PaymentSucceeded,
+            ] {
                 assert!(transition(from, action).is_err());
             }
         }

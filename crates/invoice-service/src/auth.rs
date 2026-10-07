@@ -46,14 +46,19 @@ pub fn hash_key(key: &str) -> Vec<u8> {
 pub fn parse_key(key: &str) -> Option<&str> {
     let rest = key.strip_prefix("sk_")?;
     let (prefix, secret) = rest.split_once('_')?;
-    let valid = |s: &str, len: usize| s.len() == len && s.bytes().all(|b| b.is_ascii_alphanumeric());
+    let valid =
+        |s: &str, len: usize| s.len() == len && s.bytes().all(|b| b.is_ascii_alphanumeric());
     (valid(prefix, PREFIX_LEN) && valid(secret, SECRET_LEN)).then_some(prefix)
 }
 
 pub fn generate_key() -> NewApiKey {
     let prefix = random_base62(PREFIX_LEN);
     let key = format!("sk_{prefix}_{}", random_base62(SECRET_LEN));
-    NewApiKey { id: Uuid::now_v7(), prefix, key }
+    NewApiKey {
+        id: Uuid::now_v7(),
+        prefix,
+        key,
+    }
 }
 
 /// Inserts a key row for `business_id`. Plain INSERT: a (astronomically unlikely)
@@ -64,19 +69,22 @@ pub async fn store_key(
     key: &NewApiKey,
 ) -> sqlx::Result<()> {
     sqlx::query("INSERT INTO api_keys (id, business_id, prefix, key_hash) VALUES ($1, $2, $3, $4)")
-    .bind(key.id)
-    .bind(business_id)
-    .bind(&key.prefix)
-    .bind(hash_key(&key.key))
-    .execute(db)
-    .await?;
+        .bind(key.id)
+        .bind(business_id)
+        .bind(&key.prefix)
+        .bind(hash_key(&key.key))
+        .execute(db)
+        .await?;
     Ok(())
 }
 
 impl FromRequestParts<AppState> for Auth {
     type Rejection = ApiError;
 
-    async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, Self::Rejection> {
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
         let key = parts
             .headers
             .get(axum::http::header::AUTHORIZATION)
@@ -107,8 +115,15 @@ pub struct Admin;
 impl FromRequestParts<AppState> for Admin {
     type Rejection = ApiError;
 
-    async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, Self::Rejection> {
-        let expected = state.config.admin_token.as_deref().ok_or(ApiError::Unauthorized)?;
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
+        let expected = state
+            .config
+            .admin_token
+            .as_deref()
+            .ok_or(ApiError::Unauthorized)?;
         let given = parts
             .headers
             .get("x-admin-token")
@@ -134,7 +149,13 @@ mod tests {
 
     #[test]
     fn malformed_keys_rejected() {
-        for bad in ["", "sk_", "sk_short_x", "pk_abcdefgh_0123456789abcdef0123456789abcdef", "sk_abcdefgh_too-short"] {
+        for bad in [
+            "",
+            "sk_",
+            "sk_short_x",
+            "pk_abcdefgh_0123456789abcdef0123456789abcdef",
+            "sk_abcdefgh_too-short",
+        ] {
             assert_eq!(parse_key(bad), None, "{bad}");
         }
         assert!(parse_key("sk_demo0001_LocalDemoKeyNotForProductionUse0").is_some());

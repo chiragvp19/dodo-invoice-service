@@ -82,7 +82,11 @@ pub async fn start(config: Config) -> anyhow::Result<(SocketAddr, JoinHandle<any
     }
 
     let psp = PspClient::new(&config.psp_url, config.psp_timeout);
-    let state = AppState { db, config: Arc::new(config), psp };
+    let state = AppState {
+        db,
+        config: Arc::new(config),
+        psp,
+    };
     tokio::spawn(workers::reconciler::run(state.clone()));
     tokio::spawn(workers::webhooks::run(state.clone()));
     let listener = TcpListener::bind(&state.config.bind_addr)
@@ -90,8 +94,7 @@ pub async fn start(config: Config) -> anyhow::Result<(SocketAddr, JoinHandle<any
         .with_context(|| format!("binding {}", state.config.bind_addr))?;
     let addr = listener.local_addr()?;
     let app = router(state);
-    let server = tokio::spawn(async move {
-        axum::serve(listener, app).await.context("server error")
-    });
+    let server =
+        tokio::spawn(async move { axum::serve(listener, app).await.context("server error") });
     Ok((addr, server))
 }

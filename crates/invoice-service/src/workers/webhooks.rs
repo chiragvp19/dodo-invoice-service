@@ -93,7 +93,10 @@ async fn deliver_one(state: &AppState, http: &reqwest::Client, d: Due) -> anyhow
     let result = http
         .post(&d.url)
         .header("content-type", "application/json")
-        .header("Dodo-Signature", webhooks::signature_header(&d.secret, timestamp, &body))
+        .header(
+            "Dodo-Signature",
+            webhooks::signature_header(&d.secret, timestamp, &body),
+        )
         .header("Dodo-Event-Id", d.event_id.to_string())
         .header("Dodo-Event-Type", &d.event_type)
         .body(body)
@@ -118,7 +121,10 @@ async fn deliver_one(state: &AppState, http: &reqwest::Client, d: Due) -> anyhow
                 attempt, status_code = resp.status().as_u16(), "webhook delivered");
             return Ok(());
         }
-        Ok(resp) => (Some(resp.status().as_u16() as i16), format!("http {}", resp.status().as_u16())),
+        Ok(resp) => (
+            Some(resp.status().as_u16() as i16),
+            format!("http {}", resp.status().as_u16()),
+        ),
         Err(e) => (None, e.to_string()),
     };
 

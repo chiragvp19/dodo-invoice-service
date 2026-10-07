@@ -17,13 +17,15 @@ pub async fn enqueue(
     data: Value,
 ) -> sqlx::Result<Uuid> {
     let event_id = Uuid::now_v7();
-    sqlx::query("INSERT INTO webhook_events (id, business_id, type, payload) VALUES ($1, $2, $3, $4)")
-        .bind(event_id)
-        .bind(business_id)
-        .bind(event_type)
-        .bind(&data)
-        .execute(&mut *conn)
-        .await?;
+    sqlx::query(
+        "INSERT INTO webhook_events (id, business_id, type, payload) VALUES ($1, $2, $3, $4)",
+    )
+    .bind(event_id)
+    .bind(business_id)
+    .bind(event_type)
+    .bind(&data)
+    .execute(&mut *conn)
+    .await?;
     sqlx::query(
         "INSERT INTO webhook_deliveries (id, event_id, endpoint_id)
          SELECT gen_random_uuid(), $1, id FROM webhook_endpoints WHERE business_id = $2 AND active",

@@ -112,9 +112,11 @@ fn optional(name: &str) -> Option<String> {
 
 fn millis(name: &str, default: u64) -> anyhow::Result<Duration> {
     match env::var(name) {
-        Ok(v) => Ok(Duration::from_millis(
-            v.parse().with_context(|| format!("{name} must be an integer (ms)"))?,
-        )),
+        Ok(v) => {
+            Ok(Duration::from_millis(v.parse().with_context(|| {
+                format!("{name} must be an integer (ms)")
+            })?))
+        }
         Err(_) => Ok(Duration::from_millis(default)),
     }
 }

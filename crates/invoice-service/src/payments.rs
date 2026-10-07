@@ -66,9 +66,15 @@ pub struct StoredResponse {
 
 impl StoredResponse {
     fn into_response(self, replayed: bool) -> Response {
-        let mut resp = (self.status, [(header::CONTENT_TYPE, "application/json")], self.body).into_response();
+        let mut resp = (
+            self.status,
+            [(header::CONTENT_TYPE, "application/json")],
+            self.body,
+        )
+            .into_response();
         if replayed {
-            resp.headers_mut().insert("idempotent-replayed", HeaderValue::from_static("true"));
+            resp.headers_mut()
+                .insert("idempotent-replayed", HeaderValue::from_static("true"));
         }
         resp
     }
@@ -78,7 +84,10 @@ impl StoredResponse {
 /// reconciler, so a response stored by either one is the same bytes.
 pub fn payment_response(invoice: &Invoice, attempt: &PaymentAttempt) -> StoredResponse {
     let (status, body) = match attempt.status.as_str() {
-        "succeeded" => (StatusCode::OK, json!({ "invoice": invoice, "payment_attempt": attempt })),
+        "succeeded" => (
+            StatusCode::OK,
+            json!({ "invoice": invoice, "payment_attempt": attempt }),
+        ),
         "failed" => {
             let code = attempt.failure_code.as_deref().unwrap_or("declined");
             (
@@ -95,19 +104,30 @@ pub fn payment_response(invoice: &Invoice, attempt: &PaymentAttempt) -> StoredRe
             )
         }
         // pending / unknown: outcome not known yet.
-        _ => (StatusCode::ACCEPTED, json!({ "invoice": invoice, "payment_attempt": attempt })),
+        _ => (
+            StatusCode::ACCEPTED,
+            json!({ "invoice": invoice, "payment_attempt": attempt }),
+        ),
     };
-    StoredResponse { status, body: serde_json::to_vec(&body).expect("json serializes") }
+    StoredResponse {
+        status,
+        body: serde_json::to_vec(&body).expect("json serializes"),
+    }
 }
 
 pub async fn load_attempt(conn: &mut PgConnection, id: Uuid) -> sqlx::Result<PaymentAttempt> {
-    sqlx::query_as(&format!("SELECT {ATTEMPT_COLUMNS} FROM payment_attempts WHERE id = $1"))
-        .bind(id)
-        .fetch_one(&mut *conn)
-        .await
+    sqlx::query_as(&format!(
+        "SELECT {ATTEMPT_COLUMNS} FROM payment_attempts WHERE id = $1"
+    ))
+    .bind(id)
+    .fetch_one(&mut *conn)
+    .await
 }
 
-pub async fn list_attempts(conn: &mut PgConnection, invoice_id: Uuid) -> sqlx::Result<Vec<PaymentAttempt>> {
+pub async fn list_attempts(
+    conn: &mut PgConnection,
+    invoice_id: Uuid,
+) -> sqlx::Result<Vec<PaymentAttempt>> {
     sqlx::query_as(&format!(
         "SELECT {ATTEMPT_COLUMNS} FROM payment_attempts WHERE invoice_id = $1 ORDER BY id DESC"
     ))
@@ -125,7 +145,11 @@ pub async fn list_attempts(conn: &mut PgConnection, invoice_id: Uuid) -> sqlx::R
 /// overwritten; a key left in progress by a crashed handler gets the final answer).
 ///
 /// Returns `None` if someone else already resolved the attempt.
-pub async fn resolve(db: &PgPool, attempt_id: Uuid, outcome: &ChargeOutcome) -> anyhow::Result<Option<StoredResponse>> {
+pub async fn resolve(
+    db: &PgPool,
+    attempt_id: Uuid,
+    outcome: &ChargeOutcome,
+) -> anyhow::Result<Option<StoredResponse>> {
     let (status, psp_ref, failure_code) = match outcome {
         ChargeOutcome::Succeeded { psp_ref } => ("succeeded", Some(psp_ref.as_str()), None),
         ChargeOutcome::Failed { code } => ("failed", None, Some(code.as_str())),
@@ -151,14 +175,24 @@ pub async fn resolve(db: &PgPool, attempt_id: Uuid, outcome: &ChargeOutcome) -> 
 
     // Move the invoice out of `processing`. On failure it returns to whatever
     // status it had before the payment (open or uncollectible).
-    let previous: Option<(String,)> = sqlx::query_as("SELECT pre_payment_status FROM invoices WHERE id = $1 AND status = 'processing'")
-        .bind(invoice_id)
-        .fetch_optional(&mut *tx)
-        .await?;
+    let previous: Option<(String,)> = sqlx::query_as(
+        "SELECT pre_payment_status FROM invoices WHERE id = $1 AND status = 'processing'",
+    )
+    .bind(invoice_id)
+    .fetch_optional(&mut *tx)
+    .await?;
     let previous = previous
         .and_then(|(s,)| InvoiceStatus::parse(&s))
-        .ok_or_else(|| anyhow::anyhow!("invoice {invoice_id} is not processing while attempt {attempt_id} was in flight"))?;
-    let action = if status == "succeeded" { Action::PaymentSucceeded } else { Action::PaymentFailed { previous } };
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "invoice {invoice_id} is not processing while attempt {attempt_id} was in flight"
+            )
+        })?;
+    let action = if status == "succeeded" {
+        Action::PaymentSucceeded
+    } else {
+        Action::PaymentFailed { previous }
+    };
     let to = state_machine::transition(InvoiceStatus::Processing, action)
         .map_err(|e| anyhow::anyhow!("illegal transition {e:?}"))?;
     let moved = sqlx::query(
@@ -172,14 +206,27 @@ pub async fn resolve(db: &PgPool, attempt_id: Uuid, outcome: &ChargeOutcome) -> 
     .execute(&mut *tx)
     .await?
     .rows_affected();
-    anyhow::ensure!(moved == 1, "invoice {invoice_id} left processing concurrently");
+    anyhow::ensure!(
+        moved == 1,
+        "invoice {invoice_id} left processing concurrently"
+    );
 
     let invoice = invoices::load(&mut tx, business_id, invoice_id)
         .await?
         .ok_or_else(|| anyhow::anyhow!("invoice {invoice_id} vanished"))?;
     let attempt = load_attempt(&mut tx, attempt_id).await?;
-    let event = if to == InvoiceStatus::Paid { outbox::INVOICE_PAID } else { outbox::INVOICE_PAYMENT_FAILED };
-    outbox::enqueue(&mut tx, business_id, event, json!({ "invoice": invoice, "payment_attempt": attempt })).await?;
+    let event = if to == InvoiceStatus::Paid {
+        outbox::INVOICE_PAID
+    } else {
+        outbox::INVOICE_PAYMENT_FAILED
+    };
+    outbox::enqueue(
+        &mut tx,
+        business_id,
+        event,
+        json!({ "invoice": invoice, "payment_attempt": attempt }),
+    )
+    .await?;
 
     let response = payment_response(&invoice, &attempt);
     complete_key(&mut tx, attempt_id, &response).await?;
@@ -192,7 +239,11 @@ pub async fn resolve(db: &PgPool, attempt_id: Uuid, outcome: &ChargeOutcome) -> 
 /// The PSP answer was ambiguous: mark the attempt `unknown` (invoice stays
 /// `processing`) and store the 202 on the key in the same transaction.
 /// Returns `None` if the attempt was already resolved by the reconciler.
-async fn mark_unknown(db: &PgPool, attempt_id: Uuid, reason: &str) -> anyhow::Result<Option<StoredResponse>> {
+async fn mark_unknown(
+    db: &PgPool,
+    attempt_id: Uuid,
+    reason: &str,
+) -> anyhow::Result<Option<StoredResponse>> {
     let mut tx = db.begin().await?;
     let row: Option<(Uuid, Uuid)> = sqlx::query_as(
         "UPDATE payment_attempts SET status = 'unknown'
@@ -202,7 +253,9 @@ async fn mark_unknown(db: &PgPool, attempt_id: Uuid, reason: &str) -> anyhow::Re
     .bind(attempt_id)
     .fetch_optional(&mut *tx)
     .await?;
-    let Some((invoice_id, business_id)) = row else { return Ok(None) };
+    let Some((invoice_id, business_id)) = row else {
+        return Ok(None);
+    };
 
     let invoice = invoices::load(&mut tx, business_id, invoice_id)
         .await?
@@ -216,7 +269,11 @@ async fn mark_unknown(db: &PgPool, attempt_id: Uuid, reason: &str) -> anyhow::Re
     Ok(Some(response))
 }
 
-async fn complete_key(conn: &mut PgConnection, attempt_id: Uuid, response: &StoredResponse) -> sqlx::Result<()> {
+async fn complete_key(
+    conn: &mut PgConnection,
+    attempt_id: Uuid,
+    response: &StoredResponse,
+) -> sqlx::Result<()> {
     sqlx::query(
         "UPDATE idempotency_keys SET status = 'completed', response_code = $2, response_body = $3
          WHERE payment_attempt_id = $1 AND status = 'in_progress'",
@@ -235,8 +292,21 @@ enum KeyState {
     InProgress,
 }
 
-async fn lookup_key(db: &PgPool, business_id: Uuid, key: &str, request_hash: &[u8]) -> ApiResult<KeyState> {
-    let row: Option<(Vec<u8>, String, Option<i16>, Option<Vec<u8>>)> = sqlx::query_as(
+#[derive(FromRow)]
+struct KeyRow {
+    request_hash: Vec<u8>,
+    status: String,
+    response_code: Option<i16>,
+    response_body: Option<Vec<u8>>,
+}
+
+async fn lookup_key(
+    db: &PgPool,
+    business_id: Uuid,
+    key: &str,
+    request_hash: &[u8],
+) -> ApiResult<KeyState> {
+    let row: Option<KeyRow> = sqlx::query_as(
         "SELECT request_hash, status, response_code, response_body FROM idempotency_keys
          WHERE business_id = $1 AND key = $2 AND expires_at > now()",
     )
@@ -244,12 +314,14 @@ async fn lookup_key(db: &PgPool, business_id: Uuid, key: &str, request_hash: &[u
     .bind(key)
     .fetch_optional(db)
     .await?;
-    let Some((stored_hash, status, code, body)) = row else { return Ok(KeyState::Absent) };
+    let Some(row) = row else {
+        return Ok(KeyState::Absent);
+    };
     // Hash check first: a different request with a busy key is still 422, not 409.
-    if stored_hash != request_hash {
+    if row.request_hash != request_hash {
         return Err(ApiError::IdempotencyKeyReused);
     }
-    match (status.as_str(), code, body) {
+    match (row.status.as_str(), row.response_code, row.response_body) {
         ("completed", Some(code), Some(body)) => Ok(KeyState::Completed(StoredResponse {
             status: StatusCode::from_u16(code as u16).map_err(anyhow::Error::from)?,
             body,
@@ -272,7 +344,9 @@ fn idempotency_key(headers: &HeaderMap) -> ApiResult<String> {
         .to_str()
         .map_err(|_| ApiError::validation("Idempotency-Key must be visible ASCII"))?;
     if key.is_empty() || key.len() > 255 || !key.bytes().all(|b| b.is_ascii_graphic()) {
-        return Err(ApiError::validation("Idempotency-Key must be 1-255 visible ASCII characters"));
+        return Err(ApiError::validation(
+            "Idempotency-Key must be 1-255 visible ASCII characters",
+        ));
     }
     Ok(key.to_owned())
 }
@@ -309,16 +383,30 @@ pub async fn pay(
             KeyState::Absent => {}
         }
         // Step 2: Tx1.
-        if let Some(c) = start_attempt(&state.db, business_id, invoice_id, &key, &request_hash, &req.card_token).await? {
+        if let Some(c) = start_attempt(
+            &state.db,
+            business_id,
+            invoice_id,
+            &key,
+            &request_hash,
+            &req.card_token,
+        )
+        .await?
+        {
             claimed = Some(c);
             break;
         }
         // Lost the claim race (a concurrent same-key request committed first): look again.
     }
-    let Some((attempt_id, amount_cents)) = claimed else { return Err(request_in_progress()) };
+    let Some((attempt_id, amount_cents)) = claimed else {
+        return Err(request_in_progress());
+    };
 
     // Step 3: PSP call, no transaction or lock held.
-    let outcome = state.psp.charge(attempt_id, amount_cents, &req.card_token, invoice_id).await;
+    let outcome = state
+        .psp
+        .charge(attempt_id, amount_cents, &req.card_token, invoice_id)
+        .await;
 
     // Step 4: settle (or park as unknown).
     let settled = match &outcome {
@@ -401,12 +489,14 @@ async fn start_attempt(
     .bind(card_token)
     .execute(&mut *tx)
     .await?;
-    sqlx::query("UPDATE idempotency_keys SET payment_attempt_id = $3 WHERE business_id = $1 AND key = $2")
-        .bind(business_id)
-        .bind(key)
-        .bind(attempt_id)
-        .execute(&mut *tx)
-        .await?;
+    sqlx::query(
+        "UPDATE idempotency_keys SET payment_attempt_id = $3 WHERE business_id = $1 AND key = $2",
+    )
+    .bind(business_id)
+    .bind(key)
+    .bind(attempt_id)
+    .execute(&mut *tx)
+    .await?;
     tx.commit().await?;
 
     tracing::info!(%invoice_id, %attempt_id, amount_cents, to = "processing", "payment attempt started");

@@ -89,12 +89,29 @@ fn behaviour(token: &str) -> Option<(Duration, Outcome)> {
     })
 }
 
-async fn create_charge(State(psp): State<AppState>, headers: HeaderMap, Json(req): Json<ChargeRequest>) -> Response {
-    let Some(key) = headers.get("idempotency-key").and_then(|v| v.to_str().ok()).map(str::to_owned) else {
-        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "Idempotency-Key header required" }))).into_response();
+async fn create_charge(
+    State(psp): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<ChargeRequest>,
+) -> Response {
+    let Some(key) = headers
+        .get("idempotency-key")
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_owned)
+    else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "Idempotency-Key header required" })),
+        )
+            .into_response();
     };
     let reference = req.reference.clone().unwrap_or_default();
-    psp.stats.lock().unwrap().entry(reference.clone()).or_default().post_calls += 1;
+    psp.stats
+        .lock()
+        .unwrap()
+        .entry(reference.clone())
+        .or_default()
+        .post_calls += 1;
 
     // Idempotent replay: return the existing charge as it is right now.
     if let Some(existing) = psp.charges.lock().unwrap().get(&key).cloned() {
@@ -104,7 +121,11 @@ async fn create_charge(State(psp): State<AppState>, headers: HeaderMap, Json(req
 
     let Some((delay, outcome)) = behaviour(&req.card_token) else {
         tracing::warn!(%key, "tok_network_error: returning 500, no charge recorded");
-        return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": "simulated network error" }))).into_response();
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": "simulated network error" })),
+        )
+            .into_response();
     };
 
     // Record first, then act.
@@ -125,7 +146,12 @@ async fn create_charge(State(psp): State<AppState>, headers: HeaderMap, Json(req
             },
         );
     }
-    psp.stats.lock().unwrap().entry(reference).or_default().charges_created += 1;
+    psp.stats
+        .lock()
+        .unwrap()
+        .entry(reference)
+        .or_default()
+        .charges_created += 1;
     tracing::info!(%key, token = %req.card_token, amount_cents = req.amount_cents, delay_ms = delay.as_millis() as u64, "charge accepted");
 
     // Complete in a detached task so the charge settles even if the caller hangs up.
@@ -161,7 +187,11 @@ async fn create_charge(State(psp): State<AppState>, headers: HeaderMap, Json(req
 async fn get_charge(State(psp): State<AppState>, Path(key): Path<String>) -> Response {
     match psp.charges.lock().unwrap().get(&key).cloned() {
         Some(charge) => Json(charge).into_response(),
-        None => (StatusCode::NOT_FOUND, Json(json!({ "error": "no such charge" }))).into_response(),
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": "no such charge" })),
+        )
+            .into_response(),
     }
 }
 
@@ -171,8 +201,17 @@ struct StatsQuery {
 }
 
 /// Test helper: how many times the PSP was called / actually charged for a reference.
-async fn stats(State(psp): State<AppState>, Query(q): Query<StatsQuery>) -> Json<serde_json::Value> {
-    let s = psp.stats.lock().unwrap().get(&q.reference).copied().unwrap_or_default();
+async fn stats(
+    State(psp): State<AppState>,
+    Query(q): Query<StatsQuery>,
+) -> Json<serde_json::Value> {
+    let s = psp
+        .stats
+        .lock()
+        .unwrap()
+        .get(&q.reference)
+        .copied()
+        .unwrap_or_default();
     let succeeded = psp
         .charges
         .lock()
@@ -180,7 +219,9 @@ async fn stats(State(psp): State<AppState>, Query(q): Query<StatsQuery>) -> Json
         .values()
         .filter(|c| c.reference.as_deref() == Some(q.reference.as_str()) && c.status == "succeeded")
         .count();
-    Json(json!({ "post_calls": s.post_calls, "charges_created": s.charges_created, "succeeded": succeeded }))
+    Json(
+        json!({ "post_calls": s.post_calls, "charges_created": s.charges_created, "succeeded": succeeded }),
+    )
 }
 
 #[tokio::main]
@@ -193,7 +234,9 @@ async fn main() {
         .route("/charges/{key}", get(get_charge))
         .route("/_stats", get(stats))
         .with_state(AppState::default());
-    let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{port}")).await.unwrap();
+    let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{port}"))
+        .await
+        .unwrap();
     tracing::info!(%port, "mock-psp listening");
     axum::serve(listener, app).await.unwrap();
 }

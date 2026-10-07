@@ -31,7 +31,9 @@ pub async fn create(
 ) -> ApiResult<(StatusCode, Json<Invoice>)> {
     let (items, total_cents) = invoices::price_line_items(&req.line_items)?;
     if req.due_date < Utc::now().date_naive() {
-        return Err(ApiError::validation("due_date must not be in the past (UTC)"));
+        return Err(ApiError::validation(
+            "due_date must not be in the past (UTC)",
+        ));
     }
 
     let mut tx = state.db.begin().await?;
@@ -76,7 +78,13 @@ pub async fn create(
     let invoice = invoices::load(&mut tx, auth.business_id, id)
         .await?
         .ok_or_else(|| anyhow::anyhow!("invoice vanished inside its own transaction"))?;
-    outbox::enqueue(&mut tx, auth.business_id, outbox::INVOICE_CREATED, json!({ "invoice": invoice })).await?;
+    outbox::enqueue(
+        &mut tx,
+        auth.business_id,
+        outbox::INVOICE_CREATED,
+        json!({ "invoice": invoice }),
+    )
+    .await?;
     tx.commit().await?;
 
     tracing::info!(invoice_id = %id, business_id = %auth.business_id, total_cents, "invoice created (draft)");
@@ -114,19 +122,38 @@ pub async fn list(
         }
     }
     let mut conn = state.db.acquire().await?;
-    let rows = invoices::list(&mut conn, auth.business_id, q.status.as_deref(), q.page.starting_after, limit).await?;
+    let rows = invoices::list(
+        &mut conn,
+        auth.business_id,
+        q.status.as_deref(),
+        q.page.starting_after,
+        limit,
+    )
+    .await?;
     Ok(Json(List::from_rows(rows, limit)))
 }
 
-pub async fn finalize(auth: Auth, state: State<AppState>, id: ApiPath<Uuid>) -> ApiResult<Json<Invoice>> {
+pub async fn finalize(
+    auth: Auth,
+    state: State<AppState>,
+    id: ApiPath<Uuid>,
+) -> ApiResult<Json<Invoice>> {
     apply(auth, state, id, Action::Finalize).await
 }
 
-pub async fn void(auth: Auth, state: State<AppState>, id: ApiPath<Uuid>) -> ApiResult<Json<Invoice>> {
+pub async fn void(
+    auth: Auth,
+    state: State<AppState>,
+    id: ApiPath<Uuid>,
+) -> ApiResult<Json<Invoice>> {
     apply(auth, state, id, Action::Void).await
 }
 
-pub async fn mark_uncollectible(auth: Auth, state: State<AppState>, id: ApiPath<Uuid>) -> ApiResult<Json<Invoice>> {
+pub async fn mark_uncollectible(
+    auth: Auth,
+    state: State<AppState>,
+    id: ApiPath<Uuid>,
+) -> ApiResult<Json<Invoice>> {
     apply(auth, state, id, Action::MarkUncollectible).await
 }
 
@@ -173,14 +200,18 @@ pub async fn payment_attempts(
     ApiPath(id): ApiPath<Uuid>,
 ) -> ApiResult<Json<List<crate::payments::PaymentAttempt>>> {
     let mut conn = state.db.acquire().await?;
-    let owned: Option<(Uuid,)> = sqlx::query_as("SELECT id FROM invoices WHERE id = $1 AND business_id = $2")
-        .bind(id)
-        .bind(auth.business_id)
-        .fetch_optional(&mut *conn)
-        .await?;
+    let owned: Option<(Uuid,)> =
+        sqlx::query_as("SELECT id FROM invoices WHERE id = $1 AND business_id = $2")
+            .bind(id)
+            .bind(auth.business_id)
+            .fetch_optional(&mut *conn)
+            .await?;
     if owned.is_none() {
         return Err(ApiError::NotFound("Invoice"));
     }
     let data = crate::payments::list_attempts(&mut conn, id).await?;
-    Ok(Json(List { data, has_more: false }))
+    Ok(Json(List {
+        data,
+        has_more: false,
+    }))
 }

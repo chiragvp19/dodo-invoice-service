@@ -69,7 +69,10 @@ pub fn price_line_items(items: &[LineItemInput]) -> Result<(Vec<LineItem>, i64),
                 "line_items[{i}].unit_amount_cents must be >= 0"
             )));
         }
-        let amount = item.quantity.checked_mul(item.unit_amount_cents).ok_or_else(overflow)?;
+        let amount = item
+            .quantity
+            .checked_mul(item.unit_amount_cents)
+            .ok_or_else(overflow)?;
         total = total.checked_add(amount).ok_or_else(overflow)?;
         priced.push(LineItem {
             description: description.to_owned(),
@@ -79,7 +82,9 @@ pub fn price_line_items(items: &[LineItemInput]) -> Result<(Vec<LineItem>, i64),
         });
     }
     if total <= 0 {
-        return Err(ApiError::validation("invoice total must be greater than zero"));
+        return Err(ApiError::validation(
+            "invoice total must be greater than zero",
+        ));
     }
     Ok((priced, total))
 }
@@ -88,7 +93,11 @@ const INVOICE_COLUMNS: &str = "id, customer_id, status, 'usd' AS currency, total
                                created_at, updated_at, paid_at";
 
 /// Loads one invoice (with line items) scoped to the business.
-pub async fn load(conn: &mut PgConnection, business_id: Uuid, id: Uuid) -> sqlx::Result<Option<Invoice>> {
+pub async fn load(
+    conn: &mut PgConnection,
+    business_id: Uuid,
+    id: Uuid,
+) -> sqlx::Result<Option<Invoice>> {
     let invoice: Option<Invoice> = sqlx::query_as(&format!(
         "SELECT {INVOICE_COLUMNS} FROM invoices WHERE id = $1 AND business_id = $2"
     ))
@@ -96,7 +105,9 @@ pub async fn load(conn: &mut PgConnection, business_id: Uuid, id: Uuid) -> sqlx:
     .bind(business_id)
     .fetch_optional(&mut *conn)
     .await?;
-    let Some(mut invoice) = invoice else { return Ok(None) };
+    let Some(mut invoice) = invoice else {
+        return Ok(None);
+    };
     invoice.line_items = sqlx::query_as(
         "SELECT description, quantity, unit_amount_cents, amount_cents
          FROM invoice_line_items WHERE invoice_id = $1 ORDER BY position",
@@ -141,7 +152,12 @@ pub async fn list(
     .await?;
     for (invoice_id, description, quantity, unit_amount_cents, amount_cents) in rows {
         if let Some(inv) = invoices.iter_mut().find(|i| i.id == invoice_id) {
-            inv.line_items.push(LineItem { description, quantity, unit_amount_cents, amount_cents });
+            inv.line_items.push(LineItem {
+                description,
+                quantity,
+                unit_amount_cents,
+                amount_cents,
+            });
         }
     }
     Ok(invoices)
@@ -149,7 +165,12 @@ pub async fn list(
 
 /// After a guarded `UPDATE ... WHERE status = ANY(..)` matched no row, works
 /// out whether the invoice is missing (404) or in the wrong state (409).
-pub async fn rejection(conn: &mut PgConnection, business_id: Uuid, id: Uuid, action: &str) -> ApiError {
+pub async fn rejection(
+    conn: &mut PgConnection,
+    business_id: Uuid,
+    id: Uuid,
+    action: &str,
+) -> ApiError {
     let current: sqlx::Result<Option<(String,)>> =
         sqlx::query_as("SELECT status FROM invoices WHERE id = $1 AND business_id = $2")
             .bind(id)
@@ -157,9 +178,10 @@ pub async fn rejection(conn: &mut PgConnection, business_id: Uuid, id: Uuid, act
             .fetch_optional(&mut *conn)
             .await;
     match current {
-        Ok(Some((current_status,))) => {
-            ApiError::InvalidTransition { current_status, action: action.to_owned() }
-        }
+        Ok(Some((current_status,))) => ApiError::InvalidTransition {
+            current_status,
+            action: action.to_owned(),
+        },
         Ok(None) => ApiError::NotFound("Invoice"),
         Err(e) => e.into(),
     }
@@ -170,7 +192,11 @@ mod tests {
     use super::*;
 
     fn item(quantity: i64, unit: i64) -> LineItemInput {
-        LineItemInput { description: "x".into(), quantity, unit_amount_cents: unit }
+        LineItemInput {
+            description: "x".into(),
+            quantity,
+            unit_amount_cents: unit,
+        }
     }
 
     #[test]

@@ -7,7 +7,8 @@ use hmac::{Hmac, Mac};
 use sha2::Sha256;
 
 pub fn signature(secret: &str, timestamp: i64, body: &[u8]) -> String {
-    let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).expect("HMAC accepts any key length");
+    let mut mac =
+        Hmac::<Sha256>::new_from_slice(secret.as_bytes()).expect("HMAC accepts any key length");
     mac.update(format!("{timestamp}.").as_bytes());
     mac.update(body);
     hex::encode(mac.finalize().into_bytes())

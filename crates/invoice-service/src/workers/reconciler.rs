@@ -48,9 +48,9 @@ pub async fn reconcile_once(state: &AppState) -> anyhow::Result<()> {
             Lookup::Settled(outcome) => outcome,
             // Only safe because our POST can no longer be in flight (grace > PSP
             // timeout, enforced at startup) and the PSP records before acting.
-            Lookup::NotFound if age > state.config.psp_not_found_grace => {
-                ChargeOutcome::Failed { code: "psp_not_charged".into() }
-            }
+            Lookup::NotFound if age > state.config.psp_not_found_grace => ChargeOutcome::Failed {
+                code: "psp_not_charged".into(),
+            },
             other => {
                 tracing::debug!(%attempt_id, ?other, age_ms, "attempt not settleable yet");
                 continue;

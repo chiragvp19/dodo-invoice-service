@@ -58,13 +58,15 @@ pub async fn get(
     State(state): State<AppState>,
     ApiPath(id): ApiPath<Uuid>,
 ) -> ApiResult<Json<Customer>> {
-    sqlx::query_as("SELECT id, name, email, created_at FROM customers WHERE id = $1 AND business_id = $2")
-        .bind(id)
-        .bind(auth.business_id)
-        .fetch_optional(&state.db)
-        .await?
-        .map(Json)
-        .ok_or(ApiError::NotFound("Customer"))
+    sqlx::query_as(
+        "SELECT id, name, email, created_at FROM customers WHERE id = $1 AND business_id = $2",
+    )
+    .bind(id)
+    .bind(auth.business_id)
+    .fetch_optional(&state.db)
+    .await?
+    .map(Json)
+    .ok_or(ApiError::NotFound("Customer"))
 }
 
 pub async fn list(

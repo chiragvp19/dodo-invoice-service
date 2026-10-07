@@ -19,8 +19,8 @@ pub async fn run(db: &PgPool, config: &Config) -> anyhow::Result<()> {
     ) else {
         return Ok(());
     };
-    let prefix = auth::parse_key(key)
-        .context("DEMO_API_KEY must have the normal sk_<8>_<32> format")?;
+    let prefix =
+        auth::parse_key(key).context("DEMO_API_KEY must have the normal sk_<8>_<32> format")?;
 
     let mut tx = db.begin().await?;
     sqlx::query("INSERT INTO businesses (id, name) VALUES ($1, 'Demo Business') ON CONFLICT (id) DO NOTHING")

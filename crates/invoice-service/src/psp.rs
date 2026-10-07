@@ -52,12 +52,21 @@ impl PspClient {
             .connect_timeout(timeout.min(Duration::from_secs(2)))
             .build()
             .expect("reqwest client builds");
-        PspClient { http, base_url: base_url.trim_end_matches('/').to_owned() }
+        PspClient {
+            http,
+            base_url: base_url.trim_end_matches('/').to_owned(),
+        }
     }
 
     /// Creates a charge. `attempt_id` is the PSP idempotency key, so retrying
     /// the same attempt can never charge twice.
-    pub async fn charge(&self, attempt_id: Uuid, amount_cents: i64, card_token: &str, reference: Uuid) -> ChargeOutcome {
+    pub async fn charge(
+        &self,
+        attempt_id: Uuid,
+        amount_cents: i64,
+        card_token: &str,
+        reference: Uuid,
+    ) -> ChargeOutcome {
         let started = std::time::Instant::now();
         let result = self
             .http
@@ -68,15 +77,22 @@ impl PspClient {
             .await;
 
         let outcome = match result {
-            Err(e) if e.is_timeout() => ChargeOutcome::Ambiguous { reason: "timeout".into() },
-            Err(e) => ChargeOutcome::Ambiguous { reason: format!("transport error: {e}") },
-            Ok(resp) if !resp.status().is_success() => {
-                ChargeOutcome::Ambiguous { reason: format!("http {}", resp.status().as_u16()) }
-            }
+            Err(e) if e.is_timeout() => ChargeOutcome::Ambiguous {
+                reason: "timeout".into(),
+            },
+            Err(e) => ChargeOutcome::Ambiguous {
+                reason: format!("transport error: {e}"),
+            },
+            Ok(resp) if !resp.status().is_success() => ChargeOutcome::Ambiguous {
+                reason: format!("http {}", resp.status().as_u16()),
+            },
             Ok(resp) => match resp.json::<PspCharge>().await {
-                Ok(charge) => definitive(charge)
-                    .unwrap_or_else(|| ChargeOutcome::Ambiguous { reason: "charge not settled".into() }),
-                Err(e) => ChargeOutcome::Ambiguous { reason: format!("unreadable response: {e}") },
+                Ok(charge) => definitive(charge).unwrap_or_else(|| ChargeOutcome::Ambiguous {
+                    reason: "charge not settled".into(),
+                }),
+                Err(e) => ChargeOutcome::Ambiguous {
+                    reason: format!("unreadable response: {e}"),
+                },
             },
         };
         tracing::info!(
@@ -90,13 +106,21 @@ impl PspClient {
 
     /// Looks up a charge by the idempotency key (our attempt id).
     pub async fn lookup(&self, attempt_id: Uuid) -> Lookup {
-        let result = self.http.get(format!("{}/charges/{attempt_id}", self.base_url)).send().await;
+        let result = self
+            .http
+            .get(format!("{}/charges/{attempt_id}", self.base_url))
+            .send()
+            .await;
         match result {
             Err(e) => Lookup::Unavailable(e.to_string()),
             Ok(resp) if resp.status() == reqwest::StatusCode::NOT_FOUND => Lookup::NotFound,
-            Ok(resp) if !resp.status().is_success() => Lookup::Unavailable(format!("http {}", resp.status())),
+            Ok(resp) if !resp.status().is_success() => {
+                Lookup::Unavailable(format!("http {}", resp.status()))
+            }
             Ok(resp) => match resp.json::<PspCharge>().await {
-                Ok(charge) => definitive(charge).map(Lookup::Settled).unwrap_or(Lookup::Processing),
+                Ok(charge) => definitive(charge)
+                    .map(Lookup::Settled)
+                    .unwrap_or(Lookup::Processing),
                 Err(e) => Lookup::Unavailable(format!("unreadable response: {e}")),
             },
         }
@@ -106,7 +130,9 @@ impl PspClient {
 fn definitive(charge: PspCharge) -> Option<ChargeOutcome> {
     match (charge.status.as_str(), charge.psp_ref, charge.code) {
         ("succeeded", Some(psp_ref), _) => Some(ChargeOutcome::Succeeded { psp_ref }),
-        ("failed", _, code) => Some(ChargeOutcome::Failed { code: code.unwrap_or_else(|| "declined".into()) }),
+        ("failed", _, code) => Some(ChargeOutcome::Failed {
+            code: code.unwrap_or_else(|| "declined".into()),
+        }),
         _ => None,
     }
 }

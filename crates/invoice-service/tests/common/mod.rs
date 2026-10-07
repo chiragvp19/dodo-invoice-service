@@ -64,18 +64,31 @@ pub async fn spawn_app() -> TestApp {
         .json()
         .await
         .unwrap();
-    let api_key = resp["api_key"]["key"].as_str().expect("api key in bootstrap response").to_owned();
+    let api_key = resp["api_key"]["key"]
+        .as_str()
+        .expect("api key in bootstrap response")
+        .to_owned();
     let db = PgPool::connect(&database_url).await.unwrap();
-    TestApp { base, psp_url, http, api_key, db }
+    TestApp {
+        base,
+        psp_url,
+        http,
+        api_key,
+        db,
+    }
 }
 
 impl TestApp {
     pub fn post(&self, path: &str) -> reqwest::RequestBuilder {
-        self.http.post(format!("{}{path}", self.base)).bearer_auth(&self.api_key)
+        self.http
+            .post(format!("{}{path}", self.base))
+            .bearer_auth(&self.api_key)
     }
 
     pub fn get(&self, path: &str) -> reqwest::RequestBuilder {
-        self.http.get(format!("{}{path}", self.base)).bearer_auth(&self.api_key)
+        self.http
+            .get(format!("{}{path}", self.base))
+            .bearer_auth(&self.api_key)
     }
 
     /// Creates a customer and a finalized (open) invoice; returns the invoice id.
@@ -83,7 +96,12 @@ impl TestApp {
         let customer: Value = self
             .post("/customers")
             .json(&json!({ "name": "Ada", "email": "ada@example.com" }))
-            .send().await.unwrap().json().await.unwrap();
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
         let invoice: Value = self
             .post("/invoices")
             .json(&json!({
@@ -93,7 +111,11 @@ impl TestApp {
             }))
             .send().await.unwrap().json().await.unwrap();
         let id = invoice["id"].as_str().expect("invoice id").to_owned();
-        let finalized = self.post(&format!("/invoices/{id}/finalize")).send().await.unwrap();
+        let finalized = self
+            .post(&format!("/invoices/{id}/finalize"))
+            .send()
+            .await
+            .unwrap();
         assert_eq!(finalized.status(), 200);
         id
     }
@@ -108,19 +130,37 @@ impl TestApp {
     }
 
     pub async fn invoice(&self, id: &str) -> Value {
-        self.get(&format!("/invoices/{id}")).send().await.unwrap().json().await.unwrap()
+        self.get(&format!("/invoices/{id}"))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap()
     }
 
     pub async fn attempts(&self, invoice_id: &str) -> Vec<Value> {
-        let v: Value = self.get(&format!("/invoices/{invoice_id}/payment_attempts"))
-            .send().await.unwrap().json().await.unwrap();
+        let v: Value = self
+            .get(&format!("/invoices/{invoice_id}/payment_attempts"))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
         v["data"].as_array().unwrap().clone()
     }
 
     /// What the mock PSP saw for this invoice (we send invoice id as `reference`).
     pub async fn psp_stats(&self, invoice_id: &str) -> Value {
-        self.http.get(format!("{}/_stats?reference={invoice_id}", self.psp_url))
-            .send().await.unwrap().json().await.unwrap()
+        self.http
+            .get(format!("{}/_stats?reference={invoice_id}", self.psp_url))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap()
     }
 
     pub async fn event_count(&self, event_type: &str, invoice_id: &str) -> i64 {
@@ -142,7 +182,11 @@ impl TestApp {
             if inv["status"] == status {
                 return inv;
             }
-            assert!(start.elapsed() < deadline, "invoice {id} still '{}' after {deadline:?}, wanted '{status}'", inv["status"]);
+            assert!(
+                start.elapsed() < deadline,
+                "invoice {id} still '{}' after {deadline:?}, wanted '{status}'",
+                inv["status"]
+            );
             tokio::time::sleep(Duration::from_millis(200)).await;
         }
     }

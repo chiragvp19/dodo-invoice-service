@@ -22,9 +22,18 @@ pub fn v1() -> Router<AppState> {
         .route("/invoices/{id}", get(invoices::get))
         .route("/invoices/{id}/finalize", post(invoices::finalize))
         .route("/invoices/{id}/void", post(invoices::void))
-        .route("/invoices/{id}/mark_uncollectible", post(invoices::mark_uncollectible))
+        .route(
+            "/invoices/{id}/mark_uncollectible",
+            post(invoices::mark_uncollectible),
+        )
         .route("/invoices/{id}/pay", post(crate::payments::pay))
-        .route("/invoices/{id}/payment_attempts", get(invoices::payment_attempts))
-        .route("/webhook_endpoints", post(webhooks::create).get(webhooks::list))
+        .route(
+            "/invoices/{id}/payment_attempts",
+            get(invoices::payment_attempts),
+        )
+        .route(
+            "/webhook_endpoints",
+            post(webhooks::create).get(webhooks::list),
+        )
         .route("/events", get(webhooks::events))
 }

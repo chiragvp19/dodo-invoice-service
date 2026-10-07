@@ -20,8 +20,14 @@ pub enum ApiError {
     Validation(String),
     Unauthorized,
     NotFound(&'static str),
-    InvalidTransition { current_status: String, action: String },
-    Conflict { kind: &'static str, message: String },
+    InvalidTransition {
+        current_status: String,
+        action: String,
+    },
+    Conflict {
+        kind: &'static str,
+        message: String,
+    },
     IdempotencyKeyReused,
     Internal(anyhow::Error),
 }
@@ -33,9 +39,12 @@ impl ApiError {
 
     pub fn parts(&self) -> (StatusCode, &'static str, String, Value) {
         match self {
-            ApiError::Validation(msg) => {
-                (StatusCode::BAD_REQUEST, "validation_error", msg.clone(), json!({}))
-            }
+            ApiError::Validation(msg) => (
+                StatusCode::BAD_REQUEST,
+                "validation_error",
+                msg.clone(),
+                json!({}),
+            ),
             ApiError::Unauthorized => (
                 StatusCode::UNAUTHORIZED,
                 "unauthorized",
@@ -48,7 +57,10 @@ impl ApiError {
                 format!("{what} not found"),
                 json!({}),
             ),
-            ApiError::InvalidTransition { current_status, action } => (
+            ApiError::InvalidTransition {
+                current_status,
+                action,
+            } => (
                 StatusCode::CONFLICT,
                 "invalid_state_transition",
                 format!("Cannot {action} an invoice in status '{current_status}'"),

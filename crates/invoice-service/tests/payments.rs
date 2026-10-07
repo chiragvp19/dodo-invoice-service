@@ -18,7 +18,12 @@ async fn concurrent_payments_charge_at_most_once() {
     let mut tasks = JoinSet::new();
     for i in 0..N {
         let (app, invoice_id) = (app.clone(), invoice_id.clone());
-        tasks.spawn(async move { app.pay(&invoice_id, &format!("concurrent-{i}"), "tok_success").await.status().as_u16() });
+        tasks.spawn(async move {
+            app.pay(&invoice_id, &format!("concurrent-{i}"), "tok_success")
+                .await
+                .status()
+                .as_u16()
+        });
     }
     let mut statuses = Vec::new();
     while let Some(status) = tasks.join_next().await {
@@ -38,7 +43,11 @@ async fn concurrent_payments_charge_at_most_once() {
     assert_eq!(invoice["status"], "paid");
     assert!(invoice["paid_at"].is_string());
     let attempts = app.attempts(&invoice_id).await;
-    assert_eq!(attempts.len(), 1, "losers never created an attempt: {attempts:?}");
+    assert_eq!(
+        attempts.len(),
+        1,
+        "losers never created an attempt: {attempts:?}"
+    );
     assert_eq!(attempts[0]["status"], "succeeded");
     assert_eq!(app.event_count("invoice.paid", &invoice_id).await, 1);
 }
@@ -57,20 +66,39 @@ async fn idempotent_retry_replays_without_second_psp_call() {
     let retry = app.pay(&invoice_id, "idem-key-1", "tok_success").await;
     assert_eq!(retry.status(), 200);
     assert_eq!(retry.headers()["idempotent-replayed"], "true");
-    assert_eq!(retry.bytes().await.unwrap(), first_body, "byte-identical replay");
+    assert_eq!(
+        retry.bytes().await.unwrap(),
+        first_body,
+        "byte-identical replay"
+    );
 
-    assert_eq!(app.psp_stats(&invoice_id).await["post_calls"], 1, "PSP called exactly once");
+    assert_eq!(
+        app.psp_stats(&invoice_id).await["post_calls"],
+        1,
+        "PSP called exactly once"
+    );
 
     // Same key, different body.
-    let reused = app.pay(&invoice_id, "idem-key-1", "tok_card_declined").await;
+    let reused = app
+        .pay(&invoice_id, "idem-key-1", "tok_card_declined")
+        .await;
     assert_eq!(reused.status(), 422);
     let err: Value = reused.json().await.unwrap();
     assert_eq!(err["error"]["type"], "idempotency_key_reused");
 
     // Same key, different invoice (path is part of the hash).
     let other_invoice = app.open_invoice(1_000).await;
-    assert_eq!(app.pay(&other_invoice, "idem-key-1", "tok_success").await.status(), 422);
-    assert_eq!(app.invoice(&other_invoice).await["status"], "open", "other invoice untouched");
+    assert_eq!(
+        app.pay(&other_invoice, "idem-key-1", "tok_success")
+            .await
+            .status(),
+        422
+    );
+    assert_eq!(
+        app.invoice(&other_invoice).await["status"],
+        "open",
+        "other invoice untouched"
+    );
 
     // A new key on a paid invoice is a state conflict, and never reaches the PSP.
     let again = app.pay(&invoice_id, "idem-key-2", "tok_success").await;
@@ -86,21 +114,48 @@ async fn idempotent_retry_replays_without_second_psp_call() {
 #[tokio::test]
 async fn rejected_request_releases_the_key() {
     let app = common::spawn_app().await;
-    let customer: Value = app.post("/customers")
+    let customer: Value = app
+        .post("/customers")
         .json(&serde_json::json!({ "name": "Bo", "email": "bo@example.com" }))
-        .send().await.unwrap().json().await.unwrap();
-    let draft: Value = app.post("/invoices")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let draft: Value = app
+        .post("/invoices")
         .json(&serde_json::json!({
             "customer_id": customer["id"], "due_date": "2099-01-01",
             "line_items": [{ "description": "x", "quantity": 2, "unit_amount_cents": 250 }],
         }))
-        .send().await.unwrap().json().await.unwrap();
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
     let id = draft["id"].as_str().unwrap();
     assert_eq!(draft["total_cents"], 500);
 
-    assert_eq!(app.pay(id, "early-key", "tok_success").await.status(), 409, "draft is not payable");
-    assert_eq!(app.post(&format!("/invoices/{id}/finalize")).send().await.unwrap().status(), 200);
-    assert_eq!(app.pay(id, "early-key", "tok_success").await.status(), 200, "key was not burned by the rejection");
+    assert_eq!(
+        app.pay(id, "early-key", "tok_success").await.status(),
+        409,
+        "draft is not payable"
+    );
+    assert_eq!(
+        app.post(&format!("/invoices/{id}/finalize"))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        200
+    );
+    assert_eq!(
+        app.pay(id, "early-key", "tok_success").await.status(),
+        200,
+        "key was not burned by the rejection"
+    );
 }
 
 /// tok_network_error: the endpoint answers 202 (outcome unknown), and the
@@ -117,13 +172,22 @@ async fn psp_network_error_does_not_leave_invoice_stuck() {
     assert_eq!(body["invoice"]["status"], "processing");
     assert_eq!(body["payment_attempt"]["status"], "unknown");
 
-    app.wait_for_status(&invoice_id, "open", Duration::from_secs(10)).await;
+    app.wait_for_status(&invoice_id, "open", Duration::from_secs(10))
+        .await;
     let attempts = app.attempts(&invoice_id).await;
     assert_eq!(attempts[0]["status"], "failed");
     assert_eq!(attempts[0]["failure_code"], "psp_not_charged");
-    assert_eq!(app.event_count("invoice.payment_failed", &invoice_id).await, 1);
+    assert_eq!(
+        app.event_count("invoice.payment_failed", &invoice_id).await,
+        1
+    );
 
-    assert_eq!(app.pay(&invoice_id, "net-err-2", "tok_success").await.status(), 200);
+    assert_eq!(
+        app.pay(&invoice_id, "net-err-2", "tok_success")
+            .await
+            .status(),
+        200
+    );
     assert_eq!(app.invoice(&invoice_id).await["status"], "paid");
 }
 
@@ -137,15 +201,26 @@ async fn psp_timeout_returns_fast_and_reconciles_to_paid() {
 
     let started = Instant::now();
     let resp = app.pay(&invoice_id, "timeout-1", "tok_timeout").await;
-    assert!(started.elapsed() < Duration::from_secs(2), "endpoint must not hang: {:?}", started.elapsed());
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "endpoint must not hang: {:?}",
+        started.elapsed()
+    );
     assert_eq!(resp.status(), 202);
     let first_body = resp.bytes().await.unwrap();
     assert_eq!(app.invoice(&invoice_id).await["status"], "processing");
 
     // Another payer cannot start a second charge while the first is unresolved.
-    assert_eq!(app.pay(&invoice_id, "timeout-2", "tok_success").await.status(), 409);
+    assert_eq!(
+        app.pay(&invoice_id, "timeout-2", "tok_success")
+            .await
+            .status(),
+        409
+    );
 
-    let invoice = app.wait_for_status(&invoice_id, "paid", Duration::from_secs(40)).await;
+    let invoice = app
+        .wait_for_status(&invoice_id, "paid", Duration::from_secs(40))
+        .await;
     assert!(invoice["paid_at"].is_string());
     assert_eq!(app.attempts(&invoice_id).await[0]["status"], "succeeded");
     assert_eq!(app.psp_stats(&invoice_id).await["charges_created"], 1);
