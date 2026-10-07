@@ -1,0 +1,69 @@
+# `docker compose up` brings up Postgres, the mock PSP, the webhook receiver and
+# the invoice service. The DEMO_* values below are public, local-only credentials.
+x-demo: &demo
+  DEMO_API_KEY: sk_demo0001_LocalDemoKeyNotForProductionUse0
+  DEMO_WEBHOOK_SECRET: whsec_LocalDemoWebhookSecretNotForProd
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: dodo
+      POSTGRES_PASSWORD: dodo
+      POSTGRES_DB: dodo
+    ports:
+      - "55432:5432"   # 55432 on the host to avoid clashing with a local Postgres
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dodo -d dodo"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  mock-psp:
+    build: .   # all three services share one image (built once, cached)
+    image: dodo-invoice-service:local
+    command: ["mock-psp"]
+    environment:
+      PORT: "4000"
+    ports:
+      - "4000:4000"
+
+  webhook-receiver:
+    build: .
+    image: dodo-invoice-service:local
+    command: ["webhook-receiver"]
+    environment:
+      PORT: "9000"
+      WEBHOOK_SECRET: whsec_LocalDemoWebhookSecretNotForProd
+      FAIL_FIRST_N: "${RECEIVER_FAIL_FIRST_N:-0}"
+    ports:
+      - "9000:9000"
+
+  app:
+    build: .
+    image: dodo-invoice-service:local
+    command: ["invoice-service"]
+    depends_on:
+      db:
+        condition: service_healthy
+      mock-psp:
+        condition: service_started
+      webhook-receiver:
+        condition: service_started
+    environment:
+      <<: *demo
+      DATABASE_URL: postgres://dodo:dodo@db:5432/dodo
+      BIND_ADDR: 0.0.0.0:8080
+      PSP_URL: http://mock-psp:4000
+      PSP_TIMEOUT_MS: "5000"
+      RECONCILER_INTERVAL_MS: "5000"
+      RECONCILER_MIN_AGE_MS: "10000"
+      PSP_NOT_FOUND_GRACE_MS: "60000"
+      # Short schedule so retries are visible in a demo; default is 10s..6h.
+      WEBHOOK_RETRY_SCHEDULE: "${WEBHOOK_RETRY_SCHEDULE:-2,5,10,30,60,120,300,600}"
+      ADMIN_TOKEN: local-admin-token
+      SEED_DEMO: "true"
+      DEMO_WEBHOOK_URL: http://webhook-receiver:9000/webhooks
+      RUST_LOG: info,tower_http=info,sqlx=warn
+    ports:
+      - "8080:8080"
