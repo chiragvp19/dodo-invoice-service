@@ -1,4 +1,8 @@
+pub mod auth;
 pub mod config;
+pub mod error;
+mod routes;
+pub mod seed;
 pub mod telemetry;
 
 use std::{net::SocketAddr, sync::Arc};
@@ -13,7 +17,7 @@ use tower_http::{
     trace::TraceLayer,
 };
 
-use crate::config::Config;
+use crate::{config::Config, error::ApiError};
 
 #[derive(Clone)]
 pub struct AppState {
@@ -24,6 +28,8 @@ pub struct AppState {
 pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/healthz", get(healthz))
+        .nest("/v1", routes::v1())
+        .fallback(|| async { ApiError::NotFound("route") })
         .with_state(state)
         .layer(PropagateRequestIdLayer::x_request_id())
         .layer(TraceLayer::new_for_http().make_span_with(|req: &Request<_>| {
@@ -61,6 +67,10 @@ pub async fn start(config: Config) -> anyhow::Result<(SocketAddr, JoinHandle<any
         .run(&db)
         .await
         .context("running migrations")?;
+
+    if config.seed_demo {
+        seed::run(&db, &config).await.context("seeding demo data")?;
+    }
 
     let state = AppState { db, config: Arc::new(config) };
     let listener = TcpListener::bind(&state.config.bind_addr)
