@@ -22,4 +22,6 @@ pub fn v1() -> Router<AppState> {
         .route("/invoices/{id}/finalize", post(invoices::finalize))
         .route("/invoices/{id}/void", post(invoices::void))
         .route("/invoices/{id}/mark_uncollectible", post(invoices::mark_uncollectible))
+        .route("/invoices/{id}/pay", post(crate::payments::pay))
+        .route("/invoices/{id}/payment_attempts", get(invoices::payment_attempts))
 }

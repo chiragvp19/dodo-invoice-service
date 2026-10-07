@@ -166,3 +166,21 @@ async fn apply(
     tracing::info!(invoice_id = %id, action = action.name(), to = %to, "invoice transition");
     Ok(Json(invoice))
 }
+
+pub async fn payment_attempts(
+    auth: Auth,
+    State(state): State<AppState>,
+    ApiPath(id): ApiPath<Uuid>,
+) -> ApiResult<Json<List<crate::payments::PaymentAttempt>>> {
+    let mut conn = state.db.acquire().await?;
+    let owned: Option<(Uuid,)> = sqlx::query_as("SELECT id FROM invoices WHERE id = $1 AND business_id = $2")
+        .bind(id)
+        .bind(auth.business_id)
+        .fetch_optional(&mut *conn)
+        .await?;
+    if owned.is_none() {
+        return Err(ApiError::NotFound("Invoice"));
+    }
+    let data = crate::payments::list_attempts(&mut conn, id).await?;
+    Ok(Json(List { data, has_more: false }))
+}

@@ -4,10 +4,13 @@ pub mod error;
 pub mod invoices;
 pub mod outbox;
 pub mod pagination;
+pub mod payments;
+pub mod psp;
 mod routes;
 pub mod seed;
 pub mod state_machine;
 pub mod telemetry;
+pub mod workers;
 
 use std::{net::SocketAddr, sync::Arc};
 
@@ -21,12 +24,13 @@ use tower_http::{
     trace::TraceLayer,
 };
 
-use crate::{config::Config, error::ApiError};
+use crate::{config::Config, error::ApiError, psp::PspClient};
 
 #[derive(Clone)]
 pub struct AppState {
     pub db: PgPool,
     pub config: Arc<Config>,
+    pub psp: PspClient,
 }
 
 pub fn router(state: AppState) -> Router {
@@ -59,7 +63,7 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
     server.await?
 }
 
-/// Starts the server (and, later, background workers) and returns the bound address.
+/// Starts the server and background workers and returns the bound address.
 /// Used by `run` and by the integration tests (bind to port 0).
 pub async fn start(config: Config) -> anyhow::Result<(SocketAddr, JoinHandle<anyhow::Result<()>>)> {
     let db = PgPoolOptions::new()
@@ -76,7 +80,9 @@ pub async fn start(config: Config) -> anyhow::Result<(SocketAddr, JoinHandle<any
         seed::run(&db, &config).await.context("seeding demo data")?;
     }
 
-    let state = AppState { db, config: Arc::new(config) };
+    let psp = PspClient::new(&config.psp_url, config.psp_timeout);
+    let state = AppState { db, config: Arc::new(config), psp };
+    tokio::spawn(workers::reconciler::run(state.clone()));
     let listener = TcpListener::bind(&state.config.bind_addr)
         .await
         .with_context(|| format!("binding {}", state.config.bind_addr))?;
