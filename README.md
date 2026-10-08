@@ -117,7 +117,7 @@ cargo test --workspace
 |---|---|
 | `concurrent_payments_charge_at_most_once` | 20 parallel `/pay` → exactly one 200 and nineteen 409s, one PSP charge, invoice `paid`, one `invoice.paid` event |
 | `idempotent_retry_replays_without_second_psp_call` | byte-identical replay, a single PSP call, 422 when a key is reused with a different body or invoice |
-| `psp_timeout_returns_fast_and_reconciles_to_paid` | `tok_timeout` returns 202 in under 2 s, then the invoice is reconciled to `paid` with one charge (takes about 30 s) |
+| `psp_timeout_returns_fast_and_reconciles_to_paid` | `tok_timeout` returns 202 in under 3 s, then the invoice is reconciled to `paid` with one charge (takes about 30 s) |
 | `psp_network_error_does_not_leave_invoice_stuck` | `tok_network_error` returns 202, then the invoice is reconciled back to `open` and can be paid |
 | `rejected_request_releases_the_key` | a 409 is not cached against the idempotency key |
 

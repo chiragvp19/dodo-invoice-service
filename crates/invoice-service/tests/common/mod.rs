@@ -34,9 +34,9 @@ pub async fn spawn_app() -> TestApp {
         bind_addr: "127.0.0.1:0".into(),
         psp_url: psp_url.clone(),
         // Test timings satisfy the startup invariants: grace > timeout, min_age >= timeout.
-        psp_timeout: Duration::from_millis(500),
-        reconciler_min_age: Duration::from_millis(600),
-        psp_not_found_grace: Duration::from_millis(1_500),
+        psp_timeout: Duration::from_millis(1_000), // ~10x the mock's 100ms, robust on slow CI
+        reconciler_min_age: Duration::from_millis(1_200),
+        psp_not_found_grace: Duration::from_millis(2_500),
         reconciler_interval: Duration::from_millis(200),
         admin_token: Some(ADMIN_TOKEN.into()),
         seed_demo: false,

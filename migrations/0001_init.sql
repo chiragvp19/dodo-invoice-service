@@ -55,9 +55,10 @@ CREATE TABLE invoices (
     -- An invoice can only reference a customer of the same business.
     FOREIGN KEY (business_id, customer_id) REFERENCES customers (business_id, id),
     CHECK ((status = 'processing') = (pre_payment_status IS NOT NULL)),
-    CHECK ((status = 'paid') = (paid_at IS NOT NULL))
+    CHECK ((status = 'paid') = (paid_at IS NOT NULL)),
+    -- Target of the tenant-safe composite FK from payment_attempts.
+    UNIQUE (business_id, id)
 );
-CREATE INDEX invoices_business_idx ON invoices (business_id, id);
 CREATE INDEX invoices_business_status_idx ON invoices (business_id, status, id);
 
 CREATE TABLE invoice_line_items (
@@ -73,7 +74,7 @@ CREATE TABLE invoice_line_items (
 
 CREATE TABLE payment_attempts (
     id            UUID PRIMARY KEY,   -- also the idempotency key sent to the PSP
-    invoice_id    UUID NOT NULL REFERENCES invoices (id),
+    invoice_id    UUID NOT NULL,
     business_id   UUID NOT NULL REFERENCES businesses (id),
     status        TEXT NOT NULL CHECK (status IN ('pending', 'unknown', 'succeeded', 'failed')),
     amount_cents  BIGINT NOT NULL CHECK (amount_cents > 0),
@@ -81,7 +82,13 @@ CREATE TABLE payment_attempts (
     psp_ref       TEXT,
     failure_code  TEXT,
     created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
-    resolved_at   TIMESTAMPTZ
+    resolved_at   TIMESTAMPTZ,
+    -- An attempt can only reference an invoice of the same business.
+    FOREIGN KEY (business_id, invoice_id) REFERENCES invoices (business_id, id),
+    -- Unresolved exactly while the outcome is unknown.
+    CHECK ((status IN ('pending', 'unknown')) = (resolved_at IS NULL)),
+    CHECK (status <> 'succeeded' OR psp_ref IS NOT NULL),
+    CHECK (status <> 'failed' OR failure_code IS NOT NULL)
 );
 CREATE INDEX payment_attempts_invoice_idx ON payment_attempts (invoice_id, id);
 -- Schema-level backstops for "one payment in flight" and "never paid twice".
@@ -95,7 +102,7 @@ CREATE INDEX payment_attempts_unresolved_idx
 
 CREATE TABLE idempotency_keys (
     business_id         UUID NOT NULL REFERENCES businesses (id),
-    key                 TEXT NOT NULL,
+    key                 TEXT NOT NULL CHECK (length(key) BETWEEN 1 AND 255),  -- same rule as the API's 400
     request_hash        BYTEA NOT NULL,          -- sha256(method, path, canonical body)
     status              TEXT NOT NULL CHECK (status IN ('in_progress', 'completed')),
     response_code       SMALLINT,
@@ -104,7 +111,9 @@ CREATE TABLE idempotency_keys (
     created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
     expires_at          TIMESTAMPTZ NOT NULL,
     PRIMARY KEY (business_id, key),
-    CHECK ((status = 'completed') = (response_code IS NOT NULL AND response_body IS NOT NULL))
+    CHECK ((status = 'completed') = (response_code IS NOT NULL AND response_body IS NOT NULL)),
+    -- Only requests that created an attempt are ever stored; rejections roll back.
+    CHECK (status <> 'completed' OR payment_attempt_id IS NOT NULL)
 );
 CREATE UNIQUE INDEX idempotency_keys_attempt_idx
     ON idempotency_keys (payment_attempt_id) WHERE payment_attempt_id IS NOT NULL;
@@ -134,12 +143,13 @@ CREATE TABLE webhook_deliveries (
     event_id          UUID NOT NULL REFERENCES webhook_events (id),
     endpoint_id       UUID NOT NULL REFERENCES webhook_endpoints (id),
     status            TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'delivered', 'dead')),
-    attempts          INT NOT NULL DEFAULT 0,      -- completed tries (lease expiry does not count)
+    attempts          INT NOT NULL DEFAULT 0 CHECK (attempts >= 0),  -- completed tries (lease expiry does not count)
     next_attempt_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
     last_status_code  SMALLINT,
     last_error        TEXT,
     delivered_at      TIMESTAMPTZ,
     created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
-    UNIQUE (event_id, endpoint_id)
+    UNIQUE (event_id, endpoint_id),
+    CHECK ((status = 'delivered') = (delivered_at IS NOT NULL))
 );
 CREATE INDEX webhook_deliveries_due_idx ON webhook_deliveries (next_attempt_at) WHERE status = 'pending';

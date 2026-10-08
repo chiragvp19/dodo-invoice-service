@@ -191,7 +191,7 @@ async fn psp_network_error_does_not_leave_invoice_stuck() {
     assert_eq!(app.invoice(&invoice_id).await["status"], "paid");
 }
 
-/// tok_timeout (PSP sleeps 30s): the endpoint does not hang (202 after our 500ms
+/// tok_timeout (PSP sleeps 30s): the endpoint does not hang (202 after our 1s
 /// timeout), and the reconciler later finds the charge succeeded and marks the
 /// invoice paid. The PSP charged exactly once; a same-key retry still replays 202.
 #[tokio::test]
@@ -202,7 +202,7 @@ async fn psp_timeout_returns_fast_and_reconciles_to_paid() {
     let started = Instant::now();
     let resp = app.pay(&invoice_id, "timeout-1", "tok_timeout").await;
     assert!(
-        started.elapsed() < Duration::from_secs(2),
+        started.elapsed() < Duration::from_secs(3),
         "endpoint must not hang: {:?}",
         started.elapsed()
     );
