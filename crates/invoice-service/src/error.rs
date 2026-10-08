@@ -1,9 +1,10 @@
 //! One error envelope for every failure:
 //! `{"error": {"type": "...", "message": "...", "details": {...}}}`
 //!
-//! Status rule: 400 invalid input, 401 auth, 404 not found (including other
-//! tenants' resources), 402 payment declined, 409 state conflict or request in
-//! progress, 422 only for idempotency-key reuse, 500 internal.
+//! Status rule: 400 invalid input, 401 auth, 402 payment declined, 404 not found
+//! (including other tenants' resources), 405 wrong method, 409 state conflict or
+//! request in progress, 413 body too large, 415 not JSON, 422 only for
+//! idempotency-key reuse, 500 internal.
 
 use axum::{
     extract::{
@@ -29,6 +30,9 @@ pub enum ApiError {
         message: String,
     },
     IdempotencyKeyReused,
+    MethodNotAllowed,
+    UnsupportedMediaType(String),
+    PayloadTooLarge,
     Internal(anyhow::Error),
 }
 
@@ -75,6 +79,24 @@ impl ApiError {
                 "This Idempotency-Key was already used with a different request".into(),
                 json!({}),
             ),
+            ApiError::MethodNotAllowed => (
+                StatusCode::METHOD_NOT_ALLOWED,
+                "method_not_allowed",
+                "Method not allowed for this route".into(),
+                json!({}),
+            ),
+            ApiError::UnsupportedMediaType(msg) => (
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                "unsupported_media_type",
+                msg.clone(),
+                json!({}),
+            ),
+            ApiError::PayloadTooLarge => (
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "payload_too_large",
+                "Request body is too large".into(),
+                json!({}),
+            ),
             ApiError::Internal(_) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "internal_error",
@@ -112,8 +134,17 @@ impl From<anyhow::Error> for ApiError {
 }
 
 impl From<JsonRejection> for ApiError {
+    /// Keeps axum's 415 (not JSON) and 413 (too large). Everything else,
+    /// including axum's default 422 for well-formed JSON of the wrong shape, is
+    /// a 400: we reserve 422 for idempotency-key reuse.
     fn from(rejection: JsonRejection) -> Self {
-        ApiError::Validation(rejection.body_text())
+        match rejection.status() {
+            StatusCode::UNSUPPORTED_MEDIA_TYPE => {
+                ApiError::UnsupportedMediaType(rejection.body_text())
+            }
+            StatusCode::PAYLOAD_TOO_LARGE => ApiError::PayloadTooLarge,
+            _ => ApiError::Validation(rejection.body_text()),
+        }
     }
 }
 

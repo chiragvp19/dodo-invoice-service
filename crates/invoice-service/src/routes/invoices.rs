@@ -9,7 +9,7 @@ use crate::{
     error::{ApiError, ApiJson, ApiPath, ApiQuery, ApiResult},
     invoices::{self, Invoice, LineItemInput},
     outbox,
-    pagination::{List, Page},
+    pagination::{self, List, Page},
     state_machine::{self, Action, InvoiceStatus},
     AppState,
 };
@@ -103,11 +103,15 @@ pub async fn get(
         .ok_or(ApiError::NotFound("Invoice"))
 }
 
+/// Strict: unknown parameters are a 400. `state` is accepted as an alias for
+/// `status` (the brief says "filterable by state"); sending both is a 400.
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ListQuery {
+    #[serde(alias = "state")]
     status: Option<String>,
-    #[serde(flatten)]
-    page: Page,
+    limit: Option<i64>,
+    starting_after: Option<Uuid>,
 }
 
 pub async fn list(
@@ -115,7 +119,7 @@ pub async fn list(
     State(state): State<AppState>,
     ApiQuery(q): ApiQuery<ListQuery>,
 ) -> ApiResult<Json<List<Invoice>>> {
-    let limit = q.page.limit()?;
+    let limit = pagination::limit(q.limit)?;
     if let Some(status) = &q.status {
         if InvoiceStatus::parse(status).is_none() {
             return Err(ApiError::validation(format!("unknown status '{status}'")));
@@ -126,7 +130,7 @@ pub async fn list(
         &mut conn,
         auth.business_id,
         q.status.as_deref(),
-        q.page.starting_after,
+        q.starting_after,
         limit,
     )
     .await?;
@@ -198,7 +202,9 @@ pub async fn payment_attempts(
     auth: Auth,
     State(state): State<AppState>,
     ApiPath(id): ApiPath<Uuid>,
+    ApiQuery(page): ApiQuery<Page>,
 ) -> ApiResult<Json<List<crate::payments::PaymentAttempt>>> {
+    let limit = page.limit()?;
     let mut conn = state.db.acquire().await?;
     let owned: Option<(Uuid,)> =
         sqlx::query_as("SELECT id FROM invoices WHERE id = $1 AND business_id = $2")
@@ -209,9 +215,6 @@ pub async fn payment_attempts(
     if owned.is_none() {
         return Err(ApiError::NotFound("Invoice"));
     }
-    let data = crate::payments::list_attempts(&mut conn, id).await?;
-    Ok(Json(List {
-        data,
-        has_more: false,
-    }))
+    let rows = crate::payments::list_attempts(&mut conn, id, page.starting_after, limit).await?;
+    Ok(Json(List::from_rows(rows, limit)))
 }

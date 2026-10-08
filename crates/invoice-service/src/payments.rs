@@ -124,14 +124,21 @@ pub async fn load_attempt(conn: &mut PgConnection, id: Uuid) -> sqlx::Result<Pay
     .await
 }
 
+/// Newest first; fetches `limit + 1` rows so the caller can compute `has_more`.
 pub async fn list_attempts(
     conn: &mut PgConnection,
     invoice_id: Uuid,
+    starting_after: Option<Uuid>,
+    limit: i64,
 ) -> sqlx::Result<Vec<PaymentAttempt>> {
     sqlx::query_as(&format!(
-        "SELECT {ATTEMPT_COLUMNS} FROM payment_attempts WHERE invoice_id = $1 ORDER BY id DESC"
+        "SELECT {ATTEMPT_COLUMNS} FROM payment_attempts
+         WHERE invoice_id = $1 AND ($2::uuid IS NULL OR id < $2)
+         ORDER BY id DESC LIMIT $3"
     ))
     .bind(invoice_id)
+    .bind(starting_after)
+    .bind(limit + 1)
     .fetch_all(&mut *conn)
     .await
 }

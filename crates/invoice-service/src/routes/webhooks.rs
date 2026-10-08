@@ -8,7 +8,8 @@ use uuid::Uuid;
 use crate::{
     auth::{self, Auth},
     error::{ApiError, ApiJson, ApiQuery, ApiResult},
-    pagination::{List, Page},
+    outbox,
+    pagination::{self, List, Page},
     AppState,
 };
 
@@ -58,17 +59,23 @@ pub async fn create(
     ))
 }
 
-pub async fn list(auth: Auth, State(state): State<AppState>) -> ApiResult<Json<List<Endpoint>>> {
-    let data = sqlx::query_as(
-        "SELECT id, url, active, created_at FROM webhook_endpoints WHERE business_id = $1 ORDER BY id DESC",
+pub async fn list(
+    auth: Auth,
+    State(state): State<AppState>,
+    ApiQuery(page): ApiQuery<Page>,
+) -> ApiResult<Json<List<Endpoint>>> {
+    let limit = page.limit()?;
+    let rows = sqlx::query_as(
+        "SELECT id, url, active, created_at FROM webhook_endpoints
+         WHERE business_id = $1 AND ($2::uuid IS NULL OR id < $2)
+         ORDER BY id DESC LIMIT $3",
     )
     .bind(auth.business_id)
+    .bind(page.starting_after)
+    .bind(limit + 1)
     .fetch_all(&state.db)
     .await?;
-    Ok(Json(List {
-        data,
-        has_more: false,
-    }))
+    Ok(Json(List::from_rows(rows, limit)))
 }
 
 #[derive(Serialize, FromRow)]
@@ -83,11 +90,12 @@ pub struct Event {
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct EventsQuery {
     #[serde(rename = "type")]
     event_type: Option<String>,
-    #[serde(flatten)]
-    page: Page,
+    limit: Option<i64>,
+    starting_after: Option<Uuid>,
 }
 
 /// Event log, newest first: how a business reconciles webhooks it missed.
@@ -96,7 +104,15 @@ pub async fn events(
     State(state): State<AppState>,
     ApiQuery(q): ApiQuery<EventsQuery>,
 ) -> ApiResult<Json<List<Event>>> {
-    let limit = q.page.limit()?;
+    let limit = pagination::limit(q.limit)?;
+    if let Some(t) = &q.event_type {
+        if !outbox::EVENT_TYPES.contains(&t.as_str()) {
+            return Err(ApiError::validation(format!(
+                "unknown event type '{t}'; expected one of {}",
+                outbox::EVENT_TYPES.join(", ")
+            )));
+        }
+    }
     let rows = sqlx::query_as(
         "SELECT id, type, created_at, payload FROM webhook_events
          WHERE business_id = $1
@@ -106,7 +122,7 @@ pub async fn events(
     )
     .bind(auth.business_id)
     .bind(q.event_type)
-    .bind(q.page.starting_after)
+    .bind(q.starting_after)
     .bind(limit + 1)
     .fetch_all(&state.db)
     .await?;

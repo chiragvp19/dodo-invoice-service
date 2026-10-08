@@ -92,7 +92,7 @@ curl -s $API/invoices/$INVOICE_ID/pay -H "$AUTH" -H 'Content-Type: application/j
 ```
 
 **More:**
-- `GET /invoices?status=open` lists invoices by status.
+- `GET /invoices?status=open` (or `?state=open`) lists invoices by status. Unknown query parameters are rejected with 400.
 - `GET /invoices/{id}/payment_attempts` lists the attempts on one invoice.
 - `GET /events` is the event log for reconciling missed webhooks.
 - `POST /invoices/{id}/void` on a paid invoice gets **409 `invalid_state_transition`**.
@@ -120,6 +120,7 @@ cargo test --workspace
 | `psp_timeout_returns_fast_and_reconciles_to_paid` | `tok_timeout` returns 202 in under 3 s, then the invoice is reconciled to `paid` with one charge (takes about 30 s) |
 | `psp_network_error_does_not_leave_invoice_stuck` | `tok_network_error` returns 202, then the invoice is reconciled back to `open` and can be paid |
 | `rejected_request_releases_the_key` | a 409 is not cached against the idempotency key |
+| `tests/api.rs` | `limit`/`starting_after` on every list, strict query parameters (`?state=` alias, unknown parameters return 400), and 405/413/415 in the error envelope |
 
 There are also unit tests for the state-machine transition table, the integer money math (including overflow), API key parsing and webhook signatures.
 

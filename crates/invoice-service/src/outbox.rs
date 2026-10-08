@@ -8,6 +8,7 @@ use uuid::Uuid;
 pub const INVOICE_CREATED: &str = "invoice.created";
 pub const INVOICE_PAID: &str = "invoice.paid";
 pub const INVOICE_PAYMENT_FAILED: &str = "invoice.payment_failed";
+pub const EVENT_TYPES: [&str; 3] = [INVOICE_CREATED, INVOICE_PAID, INVOICE_PAYMENT_FAILED];
 
 /// Records the event and one pending delivery per active endpoint of the business.
 pub async fn enqueue(

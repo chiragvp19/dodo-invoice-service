@@ -39,6 +39,7 @@ pub fn router(state: AppState) -> Router {
         .route("/healthz", get(healthz))
         .nest("/v1", routes::v1())
         .fallback(|| async { ApiError::NotFound("route") })
+        .method_not_allowed_fallback(|| async { ApiError::MethodNotAllowed })
         .with_state(state)
         .layer(PropagateRequestIdLayer::x_request_id())
         .layer(TraceLayer::new_for_http().make_span_with(|req: &Request<_>| {

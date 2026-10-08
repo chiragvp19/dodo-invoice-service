@@ -1,3 +1,112 @@
+# Review of the API structure (best practices)
+
+Scope:
+- `routes/*`, `payments.rs` (the `pay` handler), `error.rs`, `auth.rs`, `pagination.rs`, `lib.rs` (router and middleware)
+- `docs/openapi.yaml`
+
+Checked against the brief ("consistent error format", "request and response shapes", "reliable, consistent APIs") and common REST and payments-API practice, using the Stripe API as the reference.
+
+## Verdict
+
+**The API is in good shape, and the core is well designed:**
+- **Versioning:** `/v1`.
+- **Resources:** nouns with snake_case fields.
+- **State changes:** action sub-resources (`/finalize`, `/void`, `/pay`) rather than `PATCH status`. This is the right call for a state machine, and worth one sentence in DESIGN §2.
+- **Errors:** one envelope with stable `type` codes.
+- **Tenancy:** 404 for other tenants' resources.
+- **Lists:** cursor pagination with `has_more`.
+- **Idempotency:** `Idempotency-Key` with `Idempotent-Replayed`.
+- **Status codes:** 202 for unknown outcomes and 402 for declines.
+- **Auth before parsing:** auth runs before body parsing, so unauthenticated junk gets 401 rather than 400.
+- **Safe responses:** `card_token` is never echoed back, and webhook secrets are shown exactly once.
+
+The findings below are mostly consistency gaps. The first group affects things the brief grades explicitly: a consistent error format and accurate API docs.
+
+---
+
+## A. Fix before submission (error-format consistency, docs accuracy)
+
+### A1. A wrong HTTP method returns 405 with an empty body, not the error envelope
+`lib.rs:41` sets `.fallback(...)`, which only covers paths that match no route. When the path matches but the method doesn't (for example `PUT /v1/invoices` or `DELETE /v1/customers/{id}`), axum returns its default **405 with no body**. That breaks "one error envelope for every failure", and it's an easy thing for a reviewer to try.
+
+**Fix** (axum 0.8.9 is in `Cargo.lock`, which supports this):
+```rust
+.method_not_allowed_fallback(|| async { ApiError::MethodNotAllowed })
+```
+Add `MethodNotAllowed` to `ApiError` (405, `method_not_allowed`) and to the OpenAPI error table.
+
+### A2. Content-type and body-size failures are all reported as 400
+`From<JsonRejection>` maps every rejection to `Validation`, so all of these come back as 400:
+- a missing `Content-Type: application/json` (axum's status is **415**)
+- a body over the default 2 MB limit (**413**)
+- a syntax error (400)
+
+The envelope is right, but the status is less precise than it should be. Keep the rejection's own status:
+```rust
+ApiError::Validation { status: rejection.status(), message: rejection.body_text() }
+```
+Alternatively, add `UnsupportedMediaType` and `PayloadTooLarge` variants. Either way, add both statuses to the OpenAPI table. Clients sending curl with `-d` but no `-H 'Content-Type: application/json'` will hit this, so it's worth a line in the README too.
+
+### A3. Unknown query parameters are silently ignored, including `?state=`
+The brief says invoices are "filterable by **state**", and the API uses `status`. A reviewer who tries `GET /v1/invoices?state=paid` gets an **unfiltered** list with 200, which looks like the filter is broken. Typos such as `?limt=5` are also ignored. That's inconsistent with the strict `deny_unknown_fields` on every request body.
+
+`deny_unknown_fields` doesn't work together with `#[serde(flatten)] page: Page`. So either:
+- **Preferred:** list the fields explicitly in each query struct (`status`, `limit`, `starting_after`) and add `#[serde(deny_unknown_fields)]`. Unknown parameters then return 400, for example "unknown field `state`, expected one of `status`, `limit`, `starting_after`".
+- Or also accept `state` as an alias: `#[serde(alias = "state")]` on `status`.
+
+Doing both is reasonable: the alias matches the brief's wording, and strictness catches everything else.
+
+### A4. The OpenAPI spec disagrees with the server in a few places
+| Where | Spec says | Server does | Fix |
+|---|---|---|---|
+| `/pay` `card_token` | `enum` of the 5 test tokens | Accepts any string from 1 to 255 chars; an unknown token gives 402 `invalid_token` | Drop the `enum`, keep `minLength: 1, maxLength: 255`, and list the test tokens in `description`/`examples` |
+| `/pay` replay header | `Idempotent-Replayed` on **200** only | Sent on any replayed response (200, 202 and 402) | Add the header to the 202 and 402 responses |
+| `/events` `type` | `enum` of 3 types | Accepts any string; an unknown type returns an empty list (whereas `/invoices?status=bogus` returns 400) | Validate it like `status` (400 on unknown), so the behaviour matches the spec and the sibling endpoint |
+| `/webhook_endpoints` GET, `/invoices/{id}/payment_attempts` | `{data, has_more}` | Unpaginated; `has_more` is always `false` and `limit` is not accepted | State "not paginated (bounded per business/invoice)" in both descriptions, or accept `limit`/`starting_after` like the other lists |
+| Response schemas | No `required` lists | Every field except the `*_at` timestamps documented as nullable is always present | Add `required:` to `Invoice`, `Customer`, `PaymentAttempt`, `Event`, `LineItem`, so generated clients don't make every field optional |
+| Error table | Has no 405, 413 or 415 | (after A1 and A2) | Add the three rows |
+
+After editing, lint it: `npx @redocly/cli lint docs/openapi.yaml`, or paste it into editor.swagger.io.
+
+---
+
+## B. Recommended (cheap, improves operability)
+
+**B1. Put `request_id` in error bodies.** The `x-request-id` header is already set and echoed back. Adding `"request_id": "…"` inside `error` (especially on 500, whose details are "logged, not returned") lets a client quote an id that matches your logs. Read it from the `RequestId` extension in `IntoResponse`, or attach it in a small middleware. Mention it in DESIGN under observability.
+
+**B2. Add `WWW-Authenticate: Bearer` on 401** (RFC 6750). Also, the `Bearer` scheme match is case-sensitive (`strip_prefix("Bearer ")`), but RFC 7235 says schemes are case-insensitive. `bearer sk_…` currently gets 401. A small fix makes both right.
+
+**B3. Revoking the last active key locks the business out.** `DELETE /api_keys/{id}` lets a business revoke its only key, including the one making the request. After that, there's no API path back, because the admin endpoint creates new businesses, not keys for existing ones. Either reject with 409 `last_active_key` when it would leave zero active keys, or document it as intended. There's also no way to *list* keys (id, prefix, created_at, revoked_at), so a business that lost a creation response can't find a key id to revoke. A `GET /api_keys` endpoint is about 15 lines; otherwise, list it under cuts.
+
+**B4. Webhook endpoints can't be deactivated.** There's an `active` column, but no endpoint changes it. A business with a dead URL can't stop deliveries, which will retry for about 10.7 h per event and then go `dead`. Add `DELETE /webhook_endpoints/{id}` (sets `active = false`, 200 with the endpoint) or name it in DESIGN §6. Either is fine; just don't leave it unmentioned.
+
+**B5. `/healthz` doesn't touch the database.** It always returns `ok`. For a liveness probe that's fine, but compose and reviewers usually read `/healthz` as "ready". A `SELECT 1` with a short timeout (returning 503 on failure) makes `docker compose ps` honest. If the compose healthcheck for the app uses it, the app will then show healthy only once the DB is reachable.
+
+**B6. Add a `Location` header on `201 Created`.** For example `Location: /v1/invoices/{id}`, and on the `/pay` **202** as well (pointing at the invoice), plus `Retry-After` on 202 and on 409 `request_in_progress`. These are standard hints that cost one line each, and they make the 202 contract ("poll the invoice") self-describing.
+
+---
+
+## C. Optional / talking points (fine to leave; mention in DESIGN or the video)
+
+- **Idempotency only on `/pay`.** `POST /customers` and `POST /invoices` aren't idempotent, so a client retrying after a network error creates duplicates. Stripe accepts `Idempotency-Key` on every POST. Your table and code would generalise, but extending it is scope creep. Put "idempotency on all POSTs" in DESIGN §6 or §7.
+- **Repeated transitions return 409.** For example `finalize` on an already-`open` invoice. That's defensible (strict state machine) and consistent. Say in DESIGN §2 that the state machine has no idempotent no-op transitions, and that clients use the 409's `current_status` to tell "already done" from "not allowed".
+- **402 for declines.** This matches Stripe. Some argue that a processed request should return 200 with `status: failed`. Your choice is consistent and documented; be ready to defend it in the video ("the caller's intent, payment, failed").
+- **Validation errors have no machine-readable field.** Messages contain `line_items[0].quantity`, which is good for humans. Adding `details: {"param": "line_items[0].quantity"}` (Stripe's `param`) would help clients. Low priority.
+- **Malformed UUID in the path returns 400.** That's fine and consistent. Some APIs return 404 so that ids are opaque. Either way works; no change needed.
+- **IDs are plain UUIDs.** Stripe-style prefixed ids (`in_…`, `cus_…`, `evt_…`) help with debugging, but they're cosmetic. Skip them.
+- **No filters beyond `status`.** `customer_id` and date-range filters on invoices aren't required, so leave them for "at 100x / later".
+
+---
+
+## Suggested order
+
+1. A1 (405 envelope), A2 (415/413 status), A3 (strict query params plus a `state` alias): one small commit, `fix(api): consistent errors for method, media type and unknown params`. Add a quick test hitting `PUT /v1/invoices` and `?state=`.
+2. A4: OpenAPI corrections plus a lint pass. Commit `docs(openapi): align spec with server behaviour`.
+3. B1–B6 as time allows. If you skip any, list B3 and B4 in DESIGN §6 so they read as deliberate cuts rather than oversights.
+
+---
+---
+
 # Review of migrations/0001_init.sql (schema)
 
 Compared against the brief's domain model, PLAN.md v3, and the queries the code actually runs (`payments.rs`, `outbox.rs`, `workers/*`, `routes/*`).

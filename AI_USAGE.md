@@ -36,7 +36,14 @@ These are documented in `review.md` and the commit history:
 3. **Byte-identical replay that wasn't (review N5).** Response bodies were planned as `JSONB`, which reorders keys. Fixed: `BYTEA`.
 4. **A self-contradiction that would have broken replay (review R1).** The shared resolution function would have overwritten a stored 202 with 200 after reconciliation. Fixed: only complete keys that are still `in_progress`.
 5. **A mock PSP that couldn't demo the timeout (review H5).** The first plan slept inside the request handler. hyper drops that future when the client disconnects, so the `tok_timeout` charge would never complete. Fixed: settle the charge in a spawned task. Verified by hand: a client timed out at 1 s and the charge still settled at about 30 s.
-6. **Mistakes caught during coding:**
+6. **Broken pagination that no test caught.** Claude wrote the invoice and event list queries with `#[serde(flatten)]`. With URL-encoded query strings this makes numbers fail to parse, so `GET /invoices?limit=5` returned 400. It came to light during a review of the API spec, which also found the other gaps fixed in the same commit:
+   - unknown query parameters were silently ignored, so `?state=paid` returned an unfiltered list;
+   - a wrong HTTP method got an empty 405;
+   - a missing content type got 400 instead of 415, and an oversized body 400 instead of 413;
+   - the spec and the server disagreed in places.
+
+   Fixed with strict query structs, and `tests/api.rs` now guards it.
+7. **Mistakes caught during coding:**
    - A first draft of the API-key insert used an upsert on the key prefix. A random prefix collision would then have silently taken over another business's key. Changed to a plain insert; only the demo seed upserts.
    - An invalid `$ref` in the OpenAPI spec.
 

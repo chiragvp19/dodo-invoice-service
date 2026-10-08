@@ -6,8 +6,14 @@ use crate::error::ApiError;
 pub const DEFAULT_LIMIT: i64 = 20;
 pub const MAX_LIMIT: i64 = 100;
 
-/// Cursor pagination over UUIDv7 ids, newest first.
+/// Cursor pagination over UUIDv7 ids, newest first. Unknown query parameters
+/// are rejected (400) rather than silently ignored.
+///
+/// Endpoints with extra filters declare their own strict struct with these two
+/// fields instead of `#[serde(flatten)]`: flatten is incompatible with
+/// `deny_unknown_fields` and, with query strings, makes numbers fail to parse.
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Page {
     pub limit: Option<i64>,
     pub starting_after: Option<Uuid>,
@@ -15,13 +21,17 @@ pub struct Page {
 
 impl Page {
     pub fn limit(&self) -> Result<i64, ApiError> {
-        match self.limit {
-            None => Ok(DEFAULT_LIMIT),
-            Some(l) if (1..=MAX_LIMIT).contains(&l) => Ok(l),
-            Some(_) => Err(ApiError::validation(format!(
-                "limit must be between 1 and {MAX_LIMIT}"
-            ))),
-        }
+        limit(self.limit)
+    }
+}
+
+pub fn limit(requested: Option<i64>) -> Result<i64, ApiError> {
+    match requested {
+        None => Ok(DEFAULT_LIMIT),
+        Some(l) if (1..=MAX_LIMIT).contains(&l) => Ok(l),
+        Some(_) => Err(ApiError::validation(format!(
+            "limit must be between 1 and {MAX_LIMIT}"
+        ))),
     }
 }
 

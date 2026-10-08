@@ -13,17 +13,21 @@ info:
 
     | HTTP | `error.type` | When |
     |---|---|---|
-    | 400 | `validation_error` | malformed or invalid input (incl. unknown fields, overflow, missing Idempotency-Key) |
+    | 400 | `validation_error` | malformed or invalid input: unknown body fields **or unknown query parameters**, wrong types, overflow, missing Idempotency-Key |
     | 401 | `unauthorized` | missing, unknown, malformed or revoked API key |
     | 402 | `payment_failed` | the PSP declined the charge (`details.decline_code`) |
     | 404 | `not_found` | resource does not exist **or belongs to another business** |
     | 409 | `invalid_state_transition` | action not allowed in the invoice's current status (`details.current_status`, `details.action`) |
+    | 405 | `method_not_allowed` | the route exists but not for this HTTP method |
     | 409 | `request_in_progress` | a request with the same Idempotency-Key is still running |
+    | 413 | `payload_too_large` | request body over 2 MB |
+    | 415 | `unsupported_media_type` | body sent without `Content-Type: application/json` |
     | 422 | `idempotency_key_reused` | Idempotency-Key reused with a different request (body or invoice) |
     | 500 | `internal_error` | unexpected failure (details are logged, not returned) |
 
-    **Pagination**: list endpoints return `{"data": [...], "has_more": bool}`,
-    newest first. Pass `starting_after=<last id>` for the next page.
+    **Pagination**: every list endpoint returns `{"data": [...], "has_more": bool}`,
+    newest first, and takes `limit` (1-100, default 20) and `starting_after=<last id>`.
+    Query parameters are strict: an unknown parameter is a 400, never silently ignored.
 servers:
   - url: http://localhost:8080/v1
 security:
@@ -51,9 +55,11 @@ paths:
             application/json:
               schema:
                 type: object
+                required: [business, api_key]
                 properties:
                   business:
                     type: object
+                    required: [id, name, created_at]
                     properties:
                       id: { type: string, format: uuid }
                       name: { type: string }
@@ -81,6 +87,7 @@ paths:
             application/json:
               schema:
                 type: object
+                required: [id, prefix, revoked_at]
                 properties:
                   id: { type: string, format: uuid }
                   prefix: { type: string }
@@ -111,6 +118,7 @@ paths:
       parameters: [{ $ref: "#/components/parameters/Limit" }, { $ref: "#/components/parameters/StartingAfter" }]
       responses:
         "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/CustomerList" } } } }
+        "400": { $ref: "#/components/responses/Error" }
         "401": { $ref: "#/components/responses/Error" }
   /customers/{id}:
     get:
@@ -165,6 +173,10 @@ paths:
       parameters:
         - name: status
           in: query
+          schema: { $ref: "#/components/schemas/InvoiceStatus" }
+        - name: state
+          in: query
+          description: Alias for `status`. Sending both is a 400.
           schema: { $ref: "#/components/schemas/InvoiceStatus" }
         - { $ref: "#/components/parameters/Limit" }
         - { $ref: "#/components/parameters/StartingAfter" }
@@ -244,20 +256,28 @@ paths:
               properties:
                 card_token:
                   type: string
-                  description: Mock PSP token
-                  enum: [tok_success, tok_insufficient_funds, tok_card_declined, tok_timeout, tok_network_error]
+                  minLength: 1
+                  maxLength: 255
+                  example: tok_success
+                  description: |
+                    PSP card token. Any non-empty string is accepted and passed to the PSP.
+                    The mock PSP recognises `tok_success`, `tok_insufficient_funds`,
+                    `tok_card_declined`, `tok_timeout` and `tok_network_error`; any other
+                    token is declined with `invalid_token` (402).
       responses:
         "200":
           description: Paid
-          headers: { Idempotent-Replayed: { schema: { type: string, enum: ["true"] } } }
+          headers: { Idempotent-Replayed: { $ref: "#/components/headers/IdempotentReplayed" } }
           content: { application/json: { schema: { $ref: "#/components/schemas/PaymentResult" } } }
         "202":
           description: Outcome unknown (PSP timed out or errored); invoice stays `processing` until reconciled
+          headers: { Idempotent-Replayed: { $ref: "#/components/headers/IdempotentReplayed" } }
           content: { application/json: { schema: { $ref: "#/components/schemas/PaymentResult" } } }
         "400": { $ref: "#/components/responses/Error" }
         "401": { $ref: "#/components/responses/Error" }
         "402":
           description: Declined. The invoice returns to its previous status (`open`/`uncollectible`).
+          headers: { Idempotent-Replayed: { $ref: "#/components/headers/IdempotentReplayed" } }
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
@@ -275,17 +295,13 @@ paths:
   /invoices/{id}/payment_attempts:
     get:
       summary: List payment attempts for an invoice
-      parameters: [{ $ref: "#/components/parameters/Id" }]
+      parameters:
+        - { $ref: "#/components/parameters/Id" }
+        - { $ref: "#/components/parameters/Limit" }
+        - { $ref: "#/components/parameters/StartingAfter" }
       responses:
-        "200":
-          description: OK
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  data: { type: array, items: { $ref: "#/components/schemas/PaymentAttempt" } }
-                  has_more: { type: boolean }
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/PaymentAttemptList" } } } }
+        "400": { $ref: "#/components/responses/Error" }
         "401": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
 
@@ -310,21 +326,15 @@ paths:
               schema:
                 allOf:
                   - { $ref: "#/components/schemas/WebhookEndpoint" }
-                  - { type: object, properties: { secret: { type: string, example: whsec_... } } }
+                  - { type: object, required: [secret], properties: { secret: { type: string, example: whsec_... } } }
         "400": { $ref: "#/components/responses/Error" }
         "401": { $ref: "#/components/responses/Error" }
     get:
       summary: List webhook endpoints (without secrets)
+      parameters: [{ $ref: "#/components/parameters/Limit" }, { $ref: "#/components/parameters/StartingAfter" }]
       responses:
-        "200":
-          description: OK
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  data: { type: array, items: { $ref: "#/components/schemas/WebhookEndpoint" } }
-                  has_more: { type: boolean }
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/WebhookEndpointList" } } } }
+        "400": { $ref: "#/components/responses/Error" }
         "401": { $ref: "#/components/responses/Error" }
 
   /events:
@@ -337,15 +347,8 @@ paths:
         - { $ref: "#/components/parameters/Limit" }
         - { $ref: "#/components/parameters/StartingAfter" }
       responses:
-        "200":
-          description: OK
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  data: { type: array, items: { $ref: "#/components/schemas/Event" } }
-                  has_more: { type: boolean }
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/EventList" } } } }
+        "400": { description: Unknown `type` or parameter, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "401": { $ref: "#/components/responses/Error" }
 
 components:
@@ -363,6 +366,11 @@ components:
     Id: { name: id, in: path, required: true, schema: { type: string, format: uuid } }
     Limit: { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 20 } }
     StartingAfter: { name: starting_after, in: query, schema: { type: string, format: uuid } }
+
+  headers:
+    IdempotentReplayed:
+      description: Present (`true`) when this response is a replay of the stored response for the Idempotency-Key.
+      schema: { type: string, enum: ["true"] }
 
   responses:
     Error:
@@ -396,12 +404,14 @@ components:
             details: { type: object, additionalProperties: true }
     NewApiKey:
       type: object
+      required: [id, prefix, key]
       properties:
         id: { type: string, format: uuid }
         prefix: { type: string, example: Ab3dE9xQ }
         key: { type: string, example: sk_Ab3dE9xQ_..., description: Shown once }
     Customer:
       type: object
+      required: [id, name, email, created_at]
       properties:
         id: { type: string, format: uuid }
         name: { type: string }
@@ -409,6 +419,7 @@ components:
         created_at: { type: string, format: date-time }
     CustomerList:
       type: object
+      required: [data, has_more]
       properties:
         data: { type: array, items: { $ref: "#/components/schemas/Customer" } }
         has_more: { type: boolean }
@@ -417,6 +428,7 @@ components:
       enum: [draft, open, processing, paid, void, uncollectible]
     LineItem:
       type: object
+      required: [description, quantity, unit_amount_cents, amount_cents]
       properties:
         description: { type: string }
         quantity: { type: integer }
@@ -424,6 +436,7 @@ components:
         amount_cents: { type: integer, format: int64, description: quantity × unit_amount_cents }
     Invoice:
       type: object
+      required: [id, customer_id, status, currency, total_cents, due_date, line_items, created_at, updated_at, paid_at]
       properties:
         id: { type: string, format: uuid }
         customer_id: { type: string, format: uuid }
@@ -437,11 +450,13 @@ components:
         paid_at: { type: string, format: date-time, nullable: true }
     InvoiceList:
       type: object
+      required: [data, has_more]
       properties:
         data: { type: array, items: { $ref: "#/components/schemas/Invoice" } }
         has_more: { type: boolean }
     PaymentAttempt:
       type: object
+      required: [id, invoice_id, status, amount_cents, psp_ref, failure_code, created_at, resolved_at]
       properties:
         id: { type: string, format: uuid, description: Also the idempotency key sent to the PSP }
         invoice_id: { type: string, format: uuid }
@@ -453,18 +468,39 @@ components:
         resolved_at: { type: string, format: date-time, nullable: true }
     PaymentResult:
       type: object
+      required: [invoice, payment_attempt]
       properties:
         invoice: { $ref: "#/components/schemas/Invoice" }
         payment_attempt: { $ref: "#/components/schemas/PaymentAttempt" }
     WebhookEndpoint:
       type: object
+      required: [id, url, active, created_at]
       properties:
         id: { type: string, format: uuid }
         url: { type: string }
         active: { type: boolean }
         created_at: { type: string, format: date-time }
+    PaymentAttemptList:
+      type: object
+      required: [data, has_more]
+      properties:
+        data: { type: array, items: { $ref: "#/components/schemas/PaymentAttempt" } }
+        has_more: { type: boolean }
+    WebhookEndpointList:
+      type: object
+      required: [data, has_more]
+      properties:
+        data: { type: array, items: { $ref: "#/components/schemas/WebhookEndpoint" } }
+        has_more: { type: boolean }
+    EventList:
+      type: object
+      required: [data, has_more]
+      properties:
+        data: { type: array, items: { $ref: "#/components/schemas/Event" } }
+        has_more: { type: boolean }
     Event:
       type: object
+      required: [id, type, created_at, data]
       description: |
         Also the webhook body. Webhooks carry `Dodo-Signature: t=<unix>,v1=<hex>`,
         where v1 = HMAC-SHA256(endpoint secret, "{t}.{raw body}").
