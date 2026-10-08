@@ -19,13 +19,13 @@ App-generated **UUIDv7** primary keys: time-ordered (B-tree friendly, double as 
 | customers | name, email (not unique, as in Stripe) | unique(business_id, id) | — |
 | invoices | status, pre_payment_status, total_cents > 0, due_date; **FK (business_id, customer_id) → customers** | (business_id, status, id) | partition by business; replica for lists |
 | invoice_line_items | `CHECK amount = qty × unit` | (invoice_id, position) | — |
-| payment_attempts | status pending/unknown/succeeded/failed, psp_ref | **partial unique(invoice_id) WHERE in flight**; **WHERE succeeded** | shard reconciler by id range |
+| payment_attempts | status pending/unknown/succeeded/failed, psp_ref; **FK (business_id, invoice_id) → invoices**; resolved_at set ⇔ settled | **partial unique(invoice_id) WHERE in flight**; **WHERE succeeded** | shard reconciler by id range |
 | idempotency_keys | PK(business_id, key), request_hash, **response_body BYTEA**, attempt id, expires_at | unique(attempt id) | time-partition, drop old partitions |
 | webhook_events | type, payload (outbox) | (business_id, id) | CDC → Kafka/SQS instead of polling |
 | webhook_deliveries | per event×endpoint: status, attempts, next_attempt_at | (next_attempt_at) WHERE pending | per-endpoint concurrency caps |
 
 Why this shape:
-- The composite FK makes cross-tenant invoices impossible in the schema, not just in handlers.
+- **Composite tenant FKs** (invoice → customer, attempt → invoice) make cross-tenant references impossible in the schema, not just in handlers. Cross-column CHECKs encode the invariants the code relies on: `processing ⇔ pre_payment_status`, `paid ⇔ paid_at`, `succeeded ⇒ psp_ref`, `delivered ⇔ delivered_at`, and `completed key ⇒ attempt`.
 - The partial unique indexes stop two in-flight or two successful attempts per invoice, even if the code has a bug.
 - `BYTEA` keeps replayed bodies byte-identical; JSONB reorders keys.
 - One delivery row per endpoint means a slow endpoint never delays another.
