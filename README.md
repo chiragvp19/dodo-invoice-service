@@ -137,4 +137,6 @@ docs/openapi.yaml         API reference
 
 ## Time spent
 
-**TODO:** how long this took, and what's left.
+About **4 hours** of focused work: plan and reviews, implementation, tests, and docs.
+
+Remaining work I would do next is listed in [DESIGN.md](DESIGN.md) §6 (what I cut) and §7 (production gaps).
