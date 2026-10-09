@@ -11,7 +11,7 @@ A small invoice and payment backend. Businesses create invoices for customers, c
 
 ## Demo Video
 
-**▶ TODO: add link (accessible without login)**
+**▶ [Watch the demo (Google Drive)](https://drive.google.com/file/d/1wBTMZdu3H-Zqf0zr1otrgp8I50KcbASx/view)**
 
 Contents: architecture → live demo → state machine walkthrough → failure-mode walkthrough (`tok_timeout` + reconciler).
 
